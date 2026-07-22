@@ -40,14 +40,74 @@ class LocalSink implements Sink {
   }
 }
 
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+function bimBin(): string {
+  return process.env.BRO_BIM_BIN || (process.platform === 'win32' ? 'bim.exe' : 'bim');
+}
+
+/** Run a bim google command, returning stdout. Throws sink-unavailable on failure. */
+function bim(args: string[]): string {
+  try {
+    return execFileSync(bimBin(), args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new BroError('sink-unavailable', `bim ${args.join(' ')} failed`, {
+      needsHuman: /auth|login|scope|denied|403|401/i.test(msg),
+      hint: 'ensure `bim google login` has been run with full Drive scope',
+      detail: { stderr: msg.slice(0, 400) },
+    });
+  }
+}
+
+/** Parse a single-object bim response, unwrapping the {ok,result} envelope if present. */
+function bimObj(out: string): Record<string, unknown> {
+  const line = out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{')).pop() ?? '{}';
+  const o = JSON.parse(line) as Record<string, unknown>;
+  if (o['ok'] === false) throw new BroError('sink-unavailable', 'bim returned an error', { detail: { error: o['error'] } });
+  return (o['result'] as Record<string, unknown>) ?? o;
+}
+
+interface DriveEntry { id: string; name: string; mime_type?: string }
+
+/** `bim google drive list --parent <id>` → entries (defensive to raw NDJSON or wrapped output). */
+function driveList(parentId: string): DriveEntry[] {
+  const out = bim(['google', 'drive', 'list', '--parent', parentId]);
+  const entries: DriveEntry[] = [];
+  for (const raw of out.split('\n')) {
+    const s = raw.trim();
+    if (!s.startsWith('{')) continue;
+    let o: Record<string, unknown>;
+    try {
+      o = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    const rec = (o['result'] as Record<string, unknown>) ?? o;
+    if (typeof rec['id'] === 'string' && typeof rec['name'] === 'string') {
+      entries.push({ id: rec['id'], name: rec['name'], mime_type: rec['mime_type'] as string | undefined });
+    }
+  }
+  return entries;
+}
+
+/** Find a folder named `name` under `parentId`, creating it if absent. Returns its id. */
+function driveEnsureFolder(parentId: string, name: string): string {
+  const found = driveList(parentId).find((e) => e.name === name && e.mime_type === FOLDER_MIME);
+  if (found) return found.id;
+  const res = bimObj(bim(['google', 'drive', 'mkdir', '--name', name, '--parent', parentId]));
+  const id = res['file_id'] ?? res['id'];
+  if (typeof id !== 'string') throw new BroError('sink-unavailable', `drive mkdir "${name}" returned no id`, { detail: { res } });
+  return id;
+}
+
 /**
- * Drive raw/ sink. Uploads to raw/{YYYY}/{MM}/{source}/ via `bim google drive`.
- * BLOCKED until the bim-cli enhancement (G1) lands: `drive upload` has no --parent and runs under
- * drive.file scope, so it can't target the existing raw/ tree. Until then this sink surfaces a
- * typed `sink-unavailable` error (agent-actionable), rather than silently uploading to the wrong place.
+ * Drive raw/ sink. Resolves (creating as needed) raw/{YYYY}/{MM}/{source}/, dedups by filename,
+ * and uploads via `bim google drive upload --parent`. Requires the v0.4.0 driver + full Drive scope.
  */
 class DriveRawSink implements Sink {
   readonly kind = 'drive-raw';
+  private _leaf?: string;
   constructor(
     private rootFolder: string,
     private source: string,
@@ -55,36 +115,26 @@ class DriveRawSink implements Sink {
     private month: string,
   ) {}
   location(): string {
-    return `Drive raw/${this.year}/${this.month}/${this.source}/ (folder ${this.rootFolder})`;
+    return `Drive raw/${this.year}/${this.month}/${this.source}/ (under folder ${this.rootFolder})`;
   }
-  async put(_tempPath: string, _name: string): Promise<PutResult> {
-    // Capability probe: does this bim support `drive upload --parent`?
-    if (!driveUploadSupportsParent()) {
-      throw new BroError('sink-unavailable', 'drive-raw sink needs `bim google drive upload --parent` (G1)', {
-        needsHuman: true,
-        hint: 'the bim-cli enhancement (drive scope + --parent + folder-ensure) is not deployed yet; use BRO_SINK=local meanwhile',
-        detail: { rootFolder: this.rootFolder, source: this.source },
-      });
+  private leaf(): string {
+    if (this._leaf) return this._leaf;
+    let cur = this.rootFolder;
+    for (const seg of [this.year, this.month, this.source]) cur = driveEnsureFolder(cur, seg);
+    this._leaf = cur;
+    return cur;
+  }
+  async put(tempPath: string, name: string): Promise<PutResult> {
+    const parent = this.leaf();
+    const existing = driveList(parent).find((e) => e.name === name);
+    const bytes = fs.statSync(tempPath).size;
+    if (existing) {
+      return { dest: `drive:${existing.id}`, bytes, skipped: true };
     }
-    // Intended implementation once available:
-    //   const parent = ensureDriveFolderPath(this.rootFolder, [this.year, this.month, this.source]);
-    //   if (driveChildExists(parent, name)) return { dest: `${parent}/${name}`, bytes, skipped: true };
-    //   bim google drive upload --parent <parent> --input <tempPath> --name <name> --mime-type application/pdf
-    throw new BroError('sink-unavailable', 'drive-raw upload path not yet implemented', { needsHuman: true });
+    const res = bimObj(bim(['google', 'drive', 'upload', '--parent', parent, '--input', tempPath, '--name', name, '--mime-type', 'application/pdf']));
+    const id = (res['file_id'] ?? res['id'] ?? '') as string;
+    return { dest: `drive:${id}`, bytes, skipped: false };
   }
-}
-
-/** True once bim exposes `--parent` on `drive upload`. Cached per process. */
-let _parentSupport: boolean | undefined;
-function driveUploadSupportsParent(): boolean {
-  if (_parentSupport !== undefined) return _parentSupport;
-  try {
-    const out = execFileSync('bim', ['google', 'describe'], { encoding: 'utf8' });
-    _parentSupport = /"drive upload"[\s\S]*?--parent/.test(out);
-  } catch {
-    _parentSupport = false;
-  }
-  return _parentSupport;
 }
 
 export function createSink(cfg: BroConfig, source: string, year: string, month: string): Sink {
