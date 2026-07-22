@@ -91,14 +91,27 @@ function driveList(parentId: string): DriveEntry[] {
   return entries;
 }
 
-/** Find a folder named `name` under `parentId`, creating it if absent. Returns its id. */
+/**
+ * Find a folder named `name` under `parentId`, creating it if absent. Returns its id.
+ * Resilient to the transient empty-response seen from the driver: re-checks via list and
+ * retries once, so a swallowed response never yields a duplicate folder or a hard failure.
+ */
 function driveEnsureFolder(parentId: string, name: string): string {
-  const found = driveList(parentId).find((e) => e.name === name && e.mime_type === FOLDER_MIME);
-  if (found) return found.id;
-  const res = bimObj(bim(['google', 'drive', 'mkdir', '--name', name, '--parent', parentId]));
-  const id = res['file_id'] ?? res['id'];
-  if (typeof id !== 'string') throw new BroError('sink-unavailable', `drive mkdir "${name}" returned no id`, { detail: { res } });
-  return id;
+  const folderHere = (): string | undefined =>
+    driveList(parentId).find((e) => e.name === name && e.mime_type === FOLDER_MIME)?.id;
+
+  const existing = folderHere();
+  if (existing) return existing;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = bimObj(bim(['google', 'drive', 'mkdir', '--name', name, '--parent', parentId]));
+    const id = res['file_id'] ?? res['id'];
+    if (typeof id === 'string' && id) return id;
+    // empty response: the folder may still have been created — re-check before retrying
+    const now = folderHere();
+    if (now) return now;
+  }
+  throw new BroError('sink-unavailable', `drive mkdir "${name}" returned no id after retry`, { detail: { parentId } });
 }
 
 /**
@@ -126,13 +139,19 @@ class DriveRawSink implements Sink {
   }
   async put(tempPath: string, name: string): Promise<PutResult> {
     const parent = this.leaf();
-    const existing = driveList(parent).find((e) => e.name === name);
     const bytes = fs.statSync(tempPath).size;
+    // dedup: skip if a file with this name already exists in the target folder
+    const existing = driveList(parent).find((e) => e.name === name);
     if (existing) {
       return { dest: `drive:${existing.id}`, bytes, skipped: true };
     }
     const res = bimObj(bim(['google', 'drive', 'upload', '--parent', parent, '--input', tempPath, '--name', name, '--mime-type', 'application/pdf']));
-    const id = (res['file_id'] ?? res['id'] ?? '') as string;
+    let id = (res['file_id'] ?? res['id'] ?? '') as string;
+    if (!id) {
+      // transient empty response: the upload may still have landed — re-check by name
+      id = driveList(parent).find((e) => e.name === name)?.id ?? '';
+      if (!id) throw new BroError('sink-unavailable', `drive upload "${name}" returned no id`, { detail: { parent } });
+    }
     return { dest: `drive:${id}`, bytes, skipped: false };
   }
 }
