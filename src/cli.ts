@@ -4,7 +4,8 @@ import { BroError } from './lib/errors.ts';
 import { loadConfig } from './lib/config.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 import { authMetaPath, authPath } from './lib/paths.ts';
-import { authFlow, recordFlow } from './lib/codegen.ts';
+import { recordFlow } from './lib/codegen.ts';
+import { authCapture } from './lib/auth.ts';
 import { scaffoldWorkflow } from './lib/scaffold.ts';
 import { runWorkflow } from './lib/runner.ts';
 
@@ -56,8 +57,7 @@ async function main(): Promise<number> {
     case 'auth': {
       if (!a) throw new BroError('bad-args', 'usage: bro auth <site>');
       const site = loadSite(a);
-      if (!args.json) process.stderr.write(`Opening login for ${site.name}. Log in (+ MFA), then close the window.\n`);
-      authFlow(site, cfg.browserChannel, new Date().toISOString());
+      await authCapture(site, cfg.browserChannel, new Date().toISOString());
       const res = { site: site.id, authFile: authPath(site.id) };
       if (!args.json) process.stderr.write(`Saved auth for ${site.id}.\n`);
       emit(args, true, res);
