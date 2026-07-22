@@ -5,7 +5,7 @@
   "type": "module",
   "description": "General browser workflow runner — record an authenticated browser flow, generalize it, run it later with no AI in the loop.",
   "bin": {
-    "bro": "src/cli.ts"
+    "bro": "bin/bro.mjs"
   },
   "scripts": {
     "bro": "tsx src/cli.ts",
