@@ -3,11 +3,15 @@ import fs from 'node:fs';
 import { BroError } from './lib/errors.ts';
 import { loadConfig } from './lib/config.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
-import { authMetaPath, authPath } from './lib/paths.ts';
+import { authMetaPath, authPath, profileDir } from './lib/paths.ts';
 import { recordFlow } from './lib/codegen.ts';
 import { authCapture } from './lib/auth.ts';
 import { scaffoldWorkflow } from './lib/scaffold.ts';
 import { runWorkflow } from './lib/runner.ts';
+import { startPersistentSession } from './lib/session.ts';
+import { awaitInteractiveLogin } from './lib/authGuard.ts';
+import { readSessions, setSession, removeSession, getSession, probeCDP } from './lib/sessions.ts';
+import { chromium } from 'playwright';
 
 interface Args {
   _: string[];
@@ -151,7 +155,14 @@ async function main(): Promise<number> {
 
     case 'list': {
       const sites = listSites().map((id) => {
-        let auth: Record<string, unknown> = { present: fs.existsSync(authPath(id)) };
+        let mode: string | undefined;
+        try {
+          mode = loadSite(id).browser;
+        } catch {
+          /* site config unreadable */
+        }
+        const present = mode === 'persistent' ? fs.existsSync(profileDir(id)) : fs.existsSync(authPath(id));
+        let auth: Record<string, unknown> = { present, ...(mode ? { mode } : {}) };
         try {
           auth = { ...auth, ...JSON.parse(fs.readFileSync(authMetaPath(id), 'utf8')) };
         } catch {
@@ -177,9 +188,81 @@ async function main(): Promise<number> {
       return 0;
     }
 
+    case 'session': {
+      const sub = a;
+      const siteId = b;
+      if (sub === 'start') {
+        if (!siteId) throw new BroError('bad-args', 'usage: bro session start <site>');
+        const site = loadSite(siteId);
+        const { context, port } = await startPersistentSession(site, { channel: cfg.browserChannel });
+        const page = context.pages()[0] ?? (await context.newPage());
+        await awaitInteractiveLogin(page, site, () => {});
+        setSession({ site: siteId, port, pid: process.pid, startedAt: new Date().toISOString() });
+        if (!args.json)
+          process.stderr.write(
+            `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
+              `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
+              `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
+          );
+        emit(args, true, { site: siteId, port, status: 'live' });
+        const shutdown = async () => {
+          removeSession(siteId);
+          await context.close().catch(() => {});
+          process.exit(0);
+        };
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
+        context.on('close', () => {
+          removeSession(siteId);
+          process.exit(0);
+        });
+        await new Promise<void>(() => {}); // keep the process alive holding the browser open
+        return 0;
+      }
+      if (sub === 'stop') {
+        if (!siteId) throw new BroError('bad-args', 'usage: bro session stop <site>');
+        const live = getSession(siteId);
+        if (!live) {
+          if (!args.json) process.stderr.write(`no live session for ${siteId}\n`);
+          emit(args, true, { site: siteId, status: 'not-running' });
+          return 0;
+        }
+        if (await probeCDP(live.port)) {
+          try {
+            const b = await chromium.connectOverCDP(`http://127.0.0.1:${live.port}`);
+            await b.close();
+          } catch {
+            /* fall through to pid kill */
+          }
+        }
+        try {
+          process.kill(live.pid);
+        } catch {
+          /* already gone */
+        }
+        removeSession(siteId);
+        if (!args.json) process.stderr.write(`stopped session for ${siteId}\n`);
+        emit(args, true, { site: siteId, status: 'stopped' });
+        return 0;
+      }
+      throw new BroError('bad-args', 'usage: bro session start|stop <site>');
+    }
+
+    case 'sessions': {
+      const all = readSessions();
+      const rows: Array<Record<string, unknown>> = [];
+      for (const [id, sctx] of Object.entries(all)) {
+        const alive = !!(await probeCDP(sctx.port));
+        rows.push({ site: id, port: sctx.port, pid: sctx.pid, startedAt: sctx.startedAt, alive });
+        if (!args.json) process.stderr.write(`${id}  port ${sctx.port}  ${alive ? 'LIVE' : 'dead'}\n`);
+      }
+      emit(args, true, { sessions: rows });
+      return 0;
+    }
+
     default:
       throw new BroError('bad-args', `unknown verb "${verb ?? ''}"`, {
-        hint: 'verbs: auth record new test run run-all list describe',
+        hint: 'verbs: auth session sessions record new test run run-all list describe',
       });
   }
 }
@@ -190,6 +273,8 @@ function capabilityDoc(): Record<string, unknown> {
     description: 'general browser workflow runner',
     verbs: [
       { name: 'auth', args: '<site>', interactive: true, needsHuman: true },
+      { name: 'session', args: 'start|stop <site>', interactive: true, needsHuman: true },
+      { name: 'sessions', args: '', interactive: false },
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },
       { name: 'new', args: '<site> <workflow> --kind <kind>', interactive: false },
       { name: 'test', args: '<site> <workflow> [--month]', interactive: false, dryRun: true },

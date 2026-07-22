@@ -3,7 +3,7 @@ import type { DownloadedFile } from './types.ts';
 import { loadConfig } from './config.ts';
 import { loadSite, loadWorkflow } from './registry.ts';
 import { openSession, persistState } from './session.ts';
-import { authGuard } from './authGuard.ts';
+import { authGuard, awaitInteractiveLogin } from './authGuard.ts';
 import { buildContext } from './context.ts';
 import { createSink } from './sink.ts';
 import { RunLog, runId } from './log.ts';
@@ -64,7 +64,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
   });
 
   try {
-    await authGuard(page, site);
+    if (site.interactive) {
+      await awaitInteractiveLogin(page, site, (m, e) => log.line(m, e));
+    } else {
+      await authGuard(page, site);
+    }
     log.line('authed', { url: page.url() });
 
     const tmpDir = path.join(REPO_ROOT, '.bro', 'tmp', runId(opts.stampIso, opts.siteId, opts.workflowName));
@@ -76,7 +80,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
       throw noDownloads(opts.siteId, opts.workflowName, files.length, minExpected);
     }
 
-    if (!opts.dryRun) await persistState(site, session.context, opts.stampIso);
+    if (!opts.dryRun && site.browser !== 'persistent') await persistState(site, session.context, opts.stampIso);
     log.line('done', { count: files.length });
 
     return {

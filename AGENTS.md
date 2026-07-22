@@ -18,6 +18,21 @@ an agent can author, test, and run workflows autonomously.
     `.bro/runs/<id>/` and repair the workflow.
   - `no-such-site` / `no-such-workflow` → `detail.available` lists valid values.
 
+## Sessions (banks / hardened sites)
+
+Some sites (banks) can't have their session stored for unattended runs, and a fresh automated
+context gets bot-blocked. For a site with `browser: 'persistent'` + `interactive: true`:
+
+1. A **human** runs `bro session start <site>` once and logs in; the real browser stays open on a
+   CDP port. `bro sessions --json` lists live sessions.
+2. **You** run `bro run <site> <workflow>` — it attaches to the live session over CDP and drives it
+   WITHOUT closing. No `auth.json`, no re-login while the session is alive.
+3. If the session expired, `bro run` prompts the human to log in again in the live window
+   (`auth-expired`, needsHuman).
+
+Do NOT `bro auth` persistent/interactive sites — auth happens at `session start` / run time in the
+real profile.
+
 ## Authoring a new workflow (autonomous)
 
 1. Ensure the site exists and is authed (`bro list --json`). If not authed, ask a human to

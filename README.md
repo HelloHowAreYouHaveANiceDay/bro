@@ -34,7 +34,9 @@ npx tsx src/cli.ts run cloudflare-stg invoices --month 2026-06
 
 | Verb | What it does | Human? |
 |------|--------------|--------|
-| `auth <site>` | log in; save `auth.json` | **yes** (the only human step) |
+| `auth <site>` | log in; save `auth.json` (launch-mode sites) | **yes** |
+| `session start\|stop <site>` | open/close a long-lived logged-in browser session (banks) | start = **yes** |
+| `sessions` | list live sessions | no |
 | `record <site> <wf>` | optional: demo a task to seed a workflow | yes |
 | `new <site> <wf> --kind <k>` | scaffold a typed workflow skeleton | no |
 | `test <site> <wf>` | dry-run (no files shipped) + failure artifacts | no |
@@ -47,9 +49,29 @@ Every non-interactive verb takes `--json` for a stable `{ ok, result | error }` 
 ## Sinks
 
 - `local` (default) — writes `{YYYY}/{MM}/{source}/` under `BRO_LOCAL_ROOT`.
-- `drive-raw` — uploads to Google Drive `raw/{YYYY}/{MM}/{source}/`. **Requires a bim-cli
-  enhancement** (`drive` scope + `--parent` + folder-ensure); until deployed, this sink returns a
-  typed `sink-unavailable` error and you use `local`.
+- `drive-raw` — uploads to Google Drive `raw/{YYYY}/{MM}/{source}/` via `bim google drive` (needs the
+  v0.4.0 driver: full `drive` scope + `--parent` + folder-ensure).
+
+## Browser modes (hardened / fingerprinting sites)
+
+Per-site fields in `site.json`:
+
+- `browser: 'persistent'` — drive the **real installed** Chrome/Edge on a per-site profile
+  (`launchPersistentContext`), inheriting a genuine device fingerprint (real TLS/JA3, GPU, fonts).
+  For sites (banks behind Akamai/DataDome) that blank a fresh automated context. The login lives in
+  the profile, not `auth.json`.
+- `interactive: true` — the session can't be stored unattended (banks use short-lived in-memory
+  cookies). `bro run`/`test` open the browser, wait for you to reach the dashboard, then run in that
+  **same live session**.
+
+**Live sessions** — log in once, keep it open, run many (solves the unstorable bank session):
+
+```bash
+bro session start chase-stg   # opens the real browser; you log in; it stays alive on a CDP port
+bro run chase-stg statements  # attaches over CDP, drives it, does NOT close the browser
+bro sessions                  # list live sessions
+bro session stop chase-stg    # end it
+```
 
 ## Open-source note
 

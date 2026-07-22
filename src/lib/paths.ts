@@ -24,6 +24,24 @@ export function authMetaPath(id: string): string {
 }
 
 /**
+ * Persistent browser-profile dir for a site (site.browser === 'persistent'). Kept OUTSIDE the repo
+ * (real login cookies live here) under the OS data dir; overridable via BRO_PROFILE_ROOT.
+ */
+export function profileDir(id: string): string {
+  const override = process.env.BRO_PROFILE_ROOT;
+  const root = override
+    ? path.resolve(override)
+    : path.join(
+        process.platform === 'win32'
+          ? process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '.', 'AppData', 'Local')
+          : path.join(process.env.HOME || '.', '.local', 'share'),
+        'bro',
+        'profiles',
+      );
+  return path.join(root, id);
+}
+
+/**
  * Parse a --month arg (YYYY-MM). Defaults to the PREVIOUS month when absent, since accounting
  * flows run just after a month closes. Returns normalized parts.
  *

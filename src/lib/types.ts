@@ -21,6 +21,24 @@ export interface SiteConfig {
   authedWhen?: { urlNot?: string; selector?: string };
   /** some vendors block headless — force a headed browser for this site */
   headed?: boolean;
+  /**
+   * Browser strategy:
+   * - 'launch' (default): a fresh Chromium context loaded from auth.json storageState -- fast.
+   * - 'persistent': launch the REAL installed browser (Chrome/Edge) with a persistent per-site
+   *   profile via launchPersistentContext. Inherits a genuine device fingerprint (real TLS/JA3,
+   *   GPU, fonts) + the profile's own login cookies, so hardened fingerprinting sites (banks behind
+   *   Akamai/DataDome) that flag a fresh automated context are more likely to render. No auth.json;
+   *   the human logs into the persistent profile once via `bro auth`.
+   */
+  browser?: 'launch' | 'persistent';
+  /**
+   * Interactive run: this site's session cannot be stored for unattended reruns (e.g. banks -- the
+   * auth session is a short-lived, in-memory cookie). When true, `bro run`/`test` open the browser,
+   * wait for the human to log in (reach the dashboard), then run the workflow in the SAME live
+   * session. Pair with browser: 'persistent' so the real device fingerprint + trusted-device
+   * recognition carry across logins.
+   */
+  interactive?: boolean;
 }
 
 /** One file a workflow produced (or would have — see `skipped`). Feeds the run manifest. */
