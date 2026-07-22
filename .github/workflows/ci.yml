@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: [self-hosted, linux]
+    env:
+      # bro never launches a browser in CI (no authed flows); skip the browser download.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secret-commit guard (G11)
+        run: |
+          hits=$(git ls-files | grep -E '(^|/)(auth\.json|auth\.meta\.json|\.env)$' || true)
+          if [ -n "$hits" ]; then
+            echo "ERROR: secret/session files are tracked:"; echo "$hits"; exit 1
+          fi
+          echo "ok: no auth.json/.env tracked"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

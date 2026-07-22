@@ -1,0 +1,23 @@
+# deps / build
+node_modules/
+dist/
+.playwright-cli/
+
+# secrets & live sessions — NEVER commit
+.env
+**/auth.json
+**/auth.meta.json
+
+# runtime artifacts
+.bro/
+*.log
+
+# private site definitions — the list of vendors is itself sensitive.
+# Only the committed template (_example) is public.
+sites/*
+!sites/_example/
+!sites/_example/**
+
+# OS
+.DS_Store
+Thumbs.db

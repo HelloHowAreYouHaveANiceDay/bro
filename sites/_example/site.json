@@ -1,0 +1,11 @@
+{
+  "name": "Example Vendor",
+  "loginUrl": "https://example.com/login",
+  "homeUrl": "https://example.com/account/billing",
+  "source": "example",
+  "authedWhen": {
+    "urlNot": "https://example.com/login",
+    "selector": "[data-testid=account-menu]"
+  },
+  "headed": false
+}

@@ -1,0 +1,27 @@
+{
+  "name": "bro",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "General browser workflow runner — record an authenticated browser flow, generalize it, run it later with no AI in the loop.",
+  "bin": {
+    "bro": "src/cli.ts"
+  },
+  "scripts": {
+    "bro": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "^26.1.1",
+    "playwright": "^1.61.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,44 @@
+# AGENTS.md — how an agent drives bro
+
+bro is built to be operated by agents. After a human does the **one** human step (`bro auth`),
+an agent can author, test, and run workflows autonomously.
+
+## Contract
+
+- **Discover, don't guess:** `bro describe --json` (verbs + sites + workflows + kinds) and
+  `bro list --json` (auth freshness). Never hardcode site/workflow names.
+- **Structured I/O:** every non-interactive verb accepts `--json` and returns `{ ok, result }` or
+  `{ ok, error }`. On any failure the error envelope is printed to **stdout** as JSON even without
+  `--json`. Exit code is 0 on success, 1 on error.
+- **Branch on the error, don't parse prose.** Errors have `{ kind, retriable, needsHuman, hint }`:
+  - `auth-expired` → `needsHuman: true` — you cannot fix this; tell the human to run the hinted
+    `bro auth <site>`.
+  - `bot-blocked` → `retriable: true` — retry with `--headed`.
+  - `no-downloads` → the selectors likely broke; read the run log + `failure.png` under
+    `.bro/runs/<id>/` and repair the workflow.
+  - `no-such-site` / `no-such-workflow` → `detail.available` lists valid values.
+
+## Authoring a new workflow (autonomous)
+
+1. Ensure the site exists and is authed (`bro list --json`). If not authed, ask a human to
+   `bro auth <site>` — you cannot log in.
+2. `bro new <site> <workflow> --kind <kind>` — scaffolds a typed skeleton.
+3. Explore the **already-authenticated** live session to find the invoice table / download
+   controls (use playwright-cli `snapshot`, loading the site's `auth.json`).
+4. Fill in the workflow: navigate → enumerate rows for `ctx.params.ym` → `ctx.save(download, name,
+   id)` (real download event) or `ctx.saveUrl(url, name, id)` (inline-rendered PDF).
+   - Deterministic names: `${ctx.site.source}-${invoiceId-or-date}.pdf` (enables dedup).
+5. `bro test <site> <workflow>` — dry-run (nothing shipped); iterate until it reports files.
+6. Ship for real with `bro run <site> <workflow> --month <YYYY-MM>`.
+
+## Hard rule — read-only in live financial accounts
+
+Authoring and `test` drive the **real** logged-in account. Use navigation, snapshot/read, and
+document-download controls **only**. **Never** click pay, cancel, delete, change-plan, or
+update-billing controls. Workflows are document-retrieval shaped (navigate → list → download);
+there is never a reason to touch a mutating control.
+
+## Conventions
+
+- ASCII-only output in any script; no secrets in logs.
+- Never commit `auth.json`, `auth.meta.json`, or `.env` (gitignored; CI guards it too).
