@@ -25,10 +25,16 @@ export async function openSession(
   const browser = await chromium.launch({
     channel: opts.channel,
     headless: !(opts.headed || site.headed),
+    // suppress the loudest automation signal so bot-detection (e.g. Cloudflare) doesn't challenge/block
+    args: ['--disable-blink-features=AutomationControlled'],
   });
   const context = await browser.newContext({
     storageState: statePath,
     acceptDownloads: true,
+    viewport: null,
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
   });
   return {
     browser,
