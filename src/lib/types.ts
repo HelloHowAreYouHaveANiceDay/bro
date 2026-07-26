@@ -10,8 +10,17 @@ export interface SiteConfig {
   loginUrl: string;
   /** authenticated landing page; authGuard + workflows start here */
   homeUrl: string;
-  /** accounting source-folder segment, e.g. "cloudflare" */
+  /** accounting source-folder segment, e.g. "cloudflare". For a multi-account login this is the
+   * DEFAULT source; individual downloads may override it per account (see `accounts` + save's source). */
   source: string;
+  /**
+   * Multi-account login: map masked-account last4 -> accounting source-folder segment. A workflow that
+   * enumerates accounts under ONE login (e.g. all Chase cards on one dashboard) resolves each file's
+   * source from this map (falling back to a per-account default like `chase-<last4>`), so each account
+   * lands in its own raw/{year}/{month}/{source}/ folder from a single run. Empty/absent => single-source.
+   * e.g. { "4786": "chase-stg", "3059": "chase-stg-checking" }
+   */
+  accounts?: Record<string, string>;
   /**
    * How to tell we're still logged in after loading auth.json + navigating to homeUrl.
    * - urlNot: fail if the final URL matches this (e.g. the login URL) — the default heuristic
@@ -41,6 +50,9 @@ export interface SiteConfig {
   interactive?: boolean;
 }
 
+/** One structured row a `read` workflow scraped from the authenticated DOM (JSON, not a file). */
+export type Row = Record<string, unknown>;
+
 /** One file a workflow produced (or would have — see `skipped`). Feeds the run manifest. */
 export interface DownloadedFile {
   name: string;
@@ -50,16 +62,28 @@ export interface DownloadedFile {
   skipped: boolean;
 }
 
+/** Options for save()/saveUrl(). A bare string is backward-compat shorthand for { invoiceId }. */
+export interface SaveOptions {
+  /** tag echoed into the manifest entry (statement month, invoice number, ...) */
+  invoiceId?: string;
+  /** file this download under a DIFFERENT accounting source than site.source (multi-account logins) */
+  source?: string;
+  /** file under THIS YYYY-MM's folder instead of the run's --month (a backfill spanning many months
+   * files each statement into its own raw/{year}/{month}/ from one run). Ignored if not YYYY-MM. */
+  ym?: string;
+}
+
 /** Injected into a workflow's run(). The page is ALREADY authenticated. */
 export interface WorkflowContext {
   page: Page;
   context: BrowserContext;
   site: SiteConfig;
   params: Record<string, string>;
-  /** Stage a Playwright download to the sink under a deterministic name. Returns the entry. */
-  save(download: Download, name: string, invoiceId?: string): Promise<DownloadedFile>;
+  /** Stage a Playwright download to the sink under a deterministic name. Returns the entry.
+   * `opts` may be a bare invoiceId string, or { invoiceId, source } to file under a per-account source. */
+  save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;
   /** Stage a PDF fetched by URL (for portals that render inline, no download event — G2). */
-  saveUrl(url: string, name: string, invoiceId?: string): Promise<DownloadedFile>;
+  saveUrl(url: string, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;
   /** structured progress line -> JSONL run log */
   log(msg: string, extra?: Record<string, unknown>): void;
 }
@@ -74,7 +98,15 @@ export interface Workflow {
   kind: string;
   describe: string;
   params?: WorkflowParam[];
-  /** runner fails if fewer than this many files are produced (G7 fail-loud). Default 1. */
+  /**
+   * Output shape:
+   * - 'download' (default): run() navigates -> Export -> save, returning DownloadedFile[].
+   * - 'read': run() SCRAPES the authenticated DOM and returns Row[] (JSON) -- nothing shipped to
+   *   the sink. Still strictly read-only (navigate + read controls ONLY; never a mutating click).
+   *   For live data the OAuth/API path used to serve (quotes, watchlist, orders, balances).
+   */
+  mode?: 'download' | 'read';
+  /** runner fails if fewer than this many files (download) or rows (read) are produced (G7 fail-loud). Default 1. */
   minExpected?: number;
-  run(ctx: WorkflowContext): Promise<DownloadedFile[]>;
+  run(ctx: WorkflowContext): Promise<DownloadedFile[] | Row[]>;
 }

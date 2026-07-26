@@ -1,11 +1,11 @@
 import path from 'node:path';
-import type { DownloadedFile } from './types.ts';
+import type { DownloadedFile, Row } from './types.ts';
 import { loadConfig } from './config.ts';
 import { loadSite, loadWorkflow } from './registry.ts';
 import { openSession, persistState } from './session.ts';
 import { authGuard, awaitInteractiveLogin } from './authGuard.ts';
 import { buildContext } from './context.ts';
-import { createSink } from './sink.ts';
+import { createSink, type Sink } from './sink.ts';
 import { RunLog, runId } from './log.ts';
 import { resolveMonth, REPO_ROOT } from './paths.ts';
 import { noDownloads, BroError } from './errors.ts';
@@ -18,6 +18,8 @@ export interface RunManifest {
   sink: string;
   location: string;
   files: DownloadedFile[];
+  /** present for `read`-mode workflows: the scraped rows (JSON) instead of shipped files. */
+  rows?: Row[];
   count: number;
   runLog: string;
 }
@@ -55,7 +57,20 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
   const log = new RunLog(runId(opts.stampIso, opts.siteId, opts.workflowName), { mirror: opts.mirror });
   log.line('start', { site: opts.siteId, workflow: opts.workflowName, kind: wf.kind, month: ym, dryRun: !!opts.dryRun });
 
-  const sink = opts.dryRun ? null : createSink(cfg, site.source, year, month);
+  // Per-(source, year, month) sink factory (cached): a multi-account login files each account under
+  // its own source folder, and a multi-month backfill files each statement under its own month
+  // folder -- all from ONE run. Sinks are cheap to construct (folder resolution is lazy), so cache.
+  const sinkCache = new Map<string, Sink>();
+  const sinkFor = (source: string, y: string, m: string): Sink | null => {
+    if (opts.dryRun) return null;
+    const key = `${source}/${y}/${m}`;
+    let s = sinkCache.get(key);
+    if (!s) {
+      s = createSink(cfg, source, y, m);
+      sinkCache.set(key, s);
+    }
+    return s;
+  };
   const session = await openSession(site, { channel: cfg.browserChannel, headed: opts.headed });
   const page = session.context.pages()[0] ?? (await session.context.newPage());
   const consoleErrors: string[] = [];
@@ -72,14 +87,33 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
     log.line('authed', { url: page.url() });
 
     const tmpDir = path.join(REPO_ROOT, '.bro', 'tmp', runId(opts.stampIso, opts.siteId, opts.workflowName));
-    const ctx = buildContext({ page, context: session.context, site, params, sink, log, tmpDir });
-    const files = await wf.run(ctx);
+    const ctx = buildContext({ page, context: session.context, site, params, sinkFor, defaultSource: site.source, defaultYear: year, defaultMonth: month, log, tmpDir });
+    const result = await wf.run(ctx);
 
     const minExpected = wf.minExpected ?? 1;
-    if (files.length < minExpected) {
-      throw noDownloads(opts.siteId, opts.workflowName, files.length, minExpected);
+    if (result.length < minExpected) {
+      throw noDownloads(opts.siteId, opts.workflowName, result.length, minExpected);
     }
 
+    // read-mode: return scraped rows (JSON), nothing shipped to the sink.
+    if (wf.mode === 'read') {
+      const rows = result as Row[];
+      log.line('done', { rows: rows.length });
+      return {
+        site: opts.siteId,
+        workflow: opts.workflowName,
+        kind: wf.kind,
+        month: ym,
+        sink: 'none(read)',
+        location: `(read — ${rows.length} rows)`,
+        files: [],
+        rows,
+        count: rows.length,
+        runLog: log.file,
+      };
+    }
+
+    const files = result as DownloadedFile[];
     if (!opts.dryRun && site.browser !== 'persistent') await persistState(site, session.context, opts.stampIso);
     log.line('done', { count: files.length });
 
@@ -88,8 +122,11 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
       workflow: opts.workflowName,
       kind: wf.kind,
       month: ym,
-      sink: sink ? sink.kind : 'none(dry-run)',
-      location: sink ? sink.location() : '(dry-run — nothing shipped)',
+      sink: opts.dryRun ? 'none(dry-run)' : (sinkCache.values().next().value?.kind ?? cfg.sink),
+      location: opts.dryRun
+        ? '(dry-run — nothing shipped)'
+        : [...new Set([...sinkCache.values()].map((s) => s.location()))].join('; ') ||
+          `(no files; base source ${site.source})`,
       files,
       count: files.length,
       runLog: log.file,

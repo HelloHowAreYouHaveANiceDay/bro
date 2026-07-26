@@ -46,6 +46,17 @@ real profile.
 5. `bro test <site> <workflow>` — dry-run (nothing shipped); iterate until it reports files.
 6. Ship for real with `bro run <site> <workflow> --month <YYYY-MM>`.
 
+## `read` workflows — scrape live data instead of downloading a file
+
+Set `mode: 'read'` on the workflow and return `Row[]` (`Record<string, unknown>[]`) instead of
+`DownloadedFile[]`. The runner ships nothing to the sink; `bro run <site> <workflow> --json` emits
+`{ ok, result: { rows: [...] } }`, and `minExpected` gates the min **row** count. Use this for the
+live data an OAuth/API used to serve (quotes, watchlist, balances, orders) — e.g. `sites/schwab/
+workflows/watchlist.ts` + `quotes.ts`. Same **read-only** rule as below: navigate + DOM-read ONLY.
+Gotcha: keep the `page.evaluate` body free of NAMED inner functions — tsx/esbuild rewrites them with
+a `__name` helper that is undefined in the browser context (`ReferenceError: __name is not defined`);
+inline callback arrows are fine.
+
 ## Hard rule — read-only in live financial accounts
 
 Authoring and `test` drive the **real** logged-in account. Use navigation, snapshot/read, and
