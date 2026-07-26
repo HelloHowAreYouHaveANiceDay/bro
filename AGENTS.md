@@ -64,6 +64,13 @@ document-download controls **only**. **Never** click pay, cancel, delete, change
 update-billing controls. Workflows are document-retrieval shaped (navigate → list → download);
 there is never a reason to touch a mutating control.
 
+**Narrow, explicit exception — watchlist edits.** A watchlist carries no money and no orders, so a
+wrong edit is trivially reversible. `sites/schwab/workflows/watchlist-edit.ts` is the ONE sanctioned
+mutating workflow (create/delete a watchlist, add/remove symbols). It is gated: every op refuses to
+run without `--confirm yes`. This exception covers **watchlists only** — the ban on trade / order /
+transfer / billing controls stands absolute, and no other mutating workflow may be authored without
+the same explicit, per-domain sign-off.
+
 ## Conventions
 
 - ASCII-only output in any script; no secrets in logs.
