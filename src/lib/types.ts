@@ -84,6 +84,15 @@ export interface WorkflowContext {
   save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;
   /** Stage a PDF fetched by URL (for portals that render inline, no download event — G2). */
   saveUrl(url: string, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;
+  /**
+   * Print a page to PDF via a throwaway HEADLESS clone of the live session (cookies only,
+   * navigation replayed by `replay`). Use when a portal's "download statement" control opens
+   * a native print dialog instead of a real download (page.pdf() only works headless — the
+   * live/persistent browser rejects it). `replay` drives the CLONE's page to the target
+   * content -- repeat whatever goto/select/click steps the live workflow used, since some
+   * portals need the server-side session/referrer flow re-established, not just cookies.
+   */
+  printPage(replay: (page: Page) => Promise<void>, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;
   /** structured progress line -> JSONL run log */
   log(msg: string, extra?: Record<string, unknown>): void;
 }

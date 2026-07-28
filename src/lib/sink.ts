@@ -42,6 +42,21 @@ class LocalSink implements Sink {
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
+/** Upload MIME from a filename extension. Statements are PDF; transaction exports are CSV/OFX/QFX. */
+function mimeFromName(name: string): string {
+  const ext = name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+  switch (ext) {
+    case 'pdf': return 'application/pdf';
+    case 'csv': return 'text/csv';
+    case 'qfx':
+    case 'ofx': return 'application/x-ofx';
+    case 'json': return 'application/json';
+    case 'xml': return 'application/xml';
+    case 'zip': return 'application/zip';
+    default: return 'application/octet-stream';
+  }
+}
+
 function bimBin(): string {
   return process.env.BRO_BIM_BIN || (process.platform === 'win32' ? 'bim.exe' : 'bim');
 }
@@ -145,7 +160,7 @@ class DriveRawSink implements Sink {
     if (existing) {
       return { dest: `drive:${existing.id}`, bytes, skipped: true };
     }
-    const res = bimObj(bim(['google', 'drive', 'upload', '--parent', parent, '--input', tempPath, '--name', name, '--mime-type', 'application/pdf']));
+    const res = bimObj(bim(['google', 'drive', 'upload', '--parent', parent, '--input', tempPath, '--name', name, '--mime-type', mimeFromName(name)]));
     let id = (res['file_id'] ?? res['id'] ?? '') as string;
     if (!id) {
       // transient empty response: the upload may still have landed — re-check by name

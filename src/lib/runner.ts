@@ -87,7 +87,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
     log.line('authed', { url: page.url() });
 
     const tmpDir = path.join(REPO_ROOT, '.bro', 'tmp', runId(opts.stampIso, opts.siteId, opts.workflowName));
-    const ctx = buildContext({ page, context: session.context, site, params, sinkFor, defaultSource: site.source, defaultYear: year, defaultMonth: month, log, tmpDir });
+    const ctx = buildContext({ page, context: session.context, site, params, sinkFor, defaultSource: site.source, defaultYear: year, defaultMonth: month, log, tmpDir, browserChannel: cfg.browserChannel });
     const result = await wf.run(ctx);
 
     const minExpected = wf.minExpected ?? 1;

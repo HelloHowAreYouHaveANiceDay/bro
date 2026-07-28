@@ -1,25 +1,39 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { chromium } from 'playwright';
 import type { BrowserContext, Download, Page } from 'playwright';
-import type { DownloadedFile, SiteConfig, WorkflowContext } from './types.ts';
+import type { DownloadedFile, SaveOptions, SiteConfig, WorkflowContext } from './types.ts';
 import type { Sink } from './sink.ts';
 import type { RunLog } from './log.ts';
 import { sanitizeFilename } from './paths.ts';
 
+/** A bare string arg to save()/saveUrl() is shorthand for { invoiceId }. */
+function normalizeSaveOpts(opts?: string | SaveOptions): SaveOptions {
+  return typeof opts === 'string' ? { invoiceId: opts } : (opts ?? {});
+}
+
 /**
- * Build the WorkflowContext injected into run(). `sink` is null in dry-run (`bro test`) — files
- * are staged and measured but never shipped (read-only guardrail for authoring in a live account).
+ * Build the WorkflowContext injected into run(). `sinkFor(source, year, month)` returns the sink for
+ * one (source, year, month), or null in dry-run (`bro test`) — files are staged and measured but
+ * never shipped (read-only guardrail for authoring in a live account). A workflow can file each
+ * download under a different source (multi-account logins) and/or a different month (a backfill
+ * spanning months) by passing { source, ym } to save(); absent, it uses `defaultSource` (= site.source)
+ * and the run's `defaultYear`/`defaultMonth`.
  */
 export function buildContext(args: {
   page: Page;
   context: BrowserContext;
   site: SiteConfig;
   params: Record<string, string>;
-  sink: Sink | null;
+  sinkFor: (source: string, year: string, month: string) => Sink | null;
+  defaultSource: string;
+  defaultYear: string;
+  defaultMonth: string;
   log: RunLog;
   tmpDir: string;
+  browserChannel: string;
 }): WorkflowContext {
-  const { page, context, site, params, sink, log, tmpDir } = args;
+  const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, log, tmpDir, browserChannel } = args;
   fs.mkdirSync(tmpDir, { recursive: true });
 
   function ensureName(name: string): string {
@@ -27,14 +41,21 @@ export function buildContext(args: {
     return /\.[A-Za-z0-9]{2,5}$/.test(clean) ? clean : `${clean}.pdf`;
   }
 
-  async function ship(tempPath: string, name: string, invoiceId?: string): Promise<DownloadedFile> {
+  async function ship(tempPath: string, name: string, o: SaveOptions): Promise<DownloadedFile> {
+    const { invoiceId, source } = o;
+    const src = source ?? defaultSource;
+    // a per-file ym (YYYY-MM) routes the file to its own month folder; else the run's month
+    const m = o.ym && /^(\d{4})-(\d{2})$/.exec(o.ym);
+    const year = m ? m[1]! : defaultYear;
+    const month = m ? m[2]! : defaultMonth;
     const bytes = fs.statSync(tempPath).size;
+    const sink = sinkFor(src, year, month);
     if (!sink) {
-      log.line('staged', { name, bytes, invoiceId, dryRun: true });
+      log.line('staged', { name, bytes, invoiceId, source: src, ym: `${year}-${month}`, dryRun: true });
       return { name, dest: '(dry-run)', bytes, skipped: false, ...(invoiceId ? { invoiceId } : {}) };
     }
     const res = await sink.put(tempPath, name);
-    log.line(res.skipped ? 'skipped' : 'saved', { name, dest: res.dest, bytes: res.bytes, invoiceId });
+    log.line(res.skipped ? 'skipped' : 'saved', { name, dest: res.dest, bytes: res.bytes, invoiceId, source: src, ym: `${year}-${month}` });
     return { name, dest: res.dest, bytes: res.bytes, skipped: res.skipped, ...(invoiceId ? { invoiceId } : {}) };
   }
 
@@ -45,14 +66,14 @@ export function buildContext(args: {
     params,
     log: (msg, extra) => log.line('workflow', { msg, ...(extra ?? {}) }),
 
-    async save(download: Download, name: string, invoiceId?: string): Promise<DownloadedFile> {
+    async save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
       const finalName = ensureName(name);
       const tempPath = path.join(tmpDir, finalName);
       await download.saveAs(tempPath);
-      return ship(tempPath, finalName, invoiceId);
+      return ship(tempPath, finalName, normalizeSaveOpts(opts));
     },
 
-    async saveUrl(url: string, name: string, invoiceId?: string): Promise<DownloadedFile> {
+    async saveUrl(url: string, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
       const finalName = ensureName(name);
       const resp = await context.request.get(url);
       if (!resp.ok()) {
@@ -61,7 +82,32 @@ export function buildContext(args: {
       const body = await resp.body();
       const tempPath = path.join(tmpDir, finalName);
       fs.writeFileSync(tempPath, body);
-      return ship(tempPath, finalName, invoiceId);
+      return ship(tempPath, finalName, normalizeSaveOpts(opts));
+    },
+
+    async printPage(replay, name, opts) {
+      const finalName = ensureName(name);
+      const tempPath = path.join(tmpDir, finalName);
+      // Playwright's page.pdf() only works in headless mode -- real/persistent (headed)
+      // browsers reject it (Page.printToPDF is unavailable), and many statement portals
+      // route "download this statement" through a native print dialog rather than a
+      // download event, so there's often no other way to capture an archival PDF. Fix:
+      // clone the live session's cookies into a throwaway HEADLESS context (page.pdf()
+      // works there), have `replay` re-drive whatever navigation the target page needs
+      // (some portals validate a server-side session/referrer flow, not just cookies --
+      // a raw goto to the final URL can land on an error page), then print and discard
+      // the clone. Never touches the live page/context.
+      const storageState = await context.storageState();
+      const clone = await chromium.launch({ channel: browserChannel, headless: true });
+      try {
+        const cloneContext = await clone.newContext({ storageState });
+        const clonePage = await cloneContext.newPage();
+        await replay(clonePage);
+        await clonePage.pdf({ path: tempPath, printBackground: true });
+      } finally {
+        await clone.close();
+      }
+      return ship(tempPath, finalName, normalizeSaveOpts(opts));
     },
   };
 }
