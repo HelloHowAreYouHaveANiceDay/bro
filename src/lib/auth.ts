@@ -3,6 +3,13 @@ import { chromium } from 'playwright';
 import type { SiteConfig } from './types.ts';
 import { authPath, authMetaPath, profileDir } from './paths.ts';
 
+/** A randomized, non-maximized window size (avoids a fixed fingerprint + doesn't hog the screen). */
+function randomWindowSizeArg(): string {
+  const width = 1100 + Math.floor(Math.random() * 300); // 1100-1400
+  const height = 780 + Math.floor(Math.random() * 220); // 780-1000
+  return `--window-size=${width},${height}`;
+}
+
 /**
  * Flow A — interactive login capture. Opens a HEADED browser with the automation signals
  * suppressed (many sites, esp. Cloudflare, disable the login form when navigator.webdriver is
@@ -17,7 +24,7 @@ export async function authCapture(site: SiteConfig, channel: string, stampIso: s
   const browser = await chromium.launch({
     channel,
     headless: false,
-    args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+    args: ['--disable-blink-features=AutomationControlled', randomWindowSizeArg()],
   });
   const context = await browser.newContext({ viewport: null });
   // hide the two loudest automation tells before any page script runs
@@ -109,7 +116,7 @@ async function authCapturePersistent(site: SiteConfig, channel: string, stampIso
     channel,
     headless: false,
     viewport: null,
-    args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+    args: ['--disable-blink-features=AutomationControlled', randomWindowSizeArg()],
   });
   const page = context.pages()[0] ?? (await context.newPage());
   let closedByUser = false;

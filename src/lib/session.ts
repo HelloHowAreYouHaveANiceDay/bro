@@ -6,6 +6,13 @@ import { authPath, authMetaPath, profileDir } from './paths.ts';
 import { authExpired } from './errors.ts';
 import { getSession, probeCDP, pickPort } from './sessions.ts';
 
+/** A randomized, non-maximized window size (avoids a fixed fingerprint + doesn't hog the screen). */
+function randomWindowSizeArg(): string {
+  const width = 1100 + Math.floor(Math.random() * 300); // 1100-1400
+  const height = 780 + Math.floor(Math.random() * 220); // 780-1000
+  return `--window-size=${width},${height}`;
+}
+
 export interface Session {
   /** absent in persistent mode (launchPersistentContext owns its own browser) */
   browser?: Browser;
@@ -47,7 +54,7 @@ export async function openSession(
       headless: false, // persistent + headless defeats the purpose and is itself detectable
       acceptDownloads: true,
       viewport: null,
-      args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+      args: ['--disable-blink-features=AutomationControlled', randomWindowSizeArg()],
     });
     return { context, close: async () => { await context.close(); } };
   }
@@ -116,7 +123,7 @@ export async function startPersistentSession(
     args: [
       `--remote-debugging-port=${port}`,
       '--disable-blink-features=AutomationControlled',
-      '--start-maximized',
+      randomWindowSizeArg(),
     ],
   });
   return { context, port };
