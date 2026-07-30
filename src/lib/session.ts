@@ -5,6 +5,8 @@ import type { SiteConfig } from './types.ts';
 import { authPath, authMetaPath, profileDir } from './paths.ts';
 import { authExpired } from './errors.ts';
 import { getSession, probeCDP, pickPort } from './sessions.ts';
+import type { LiveSession } from './sessions.ts';
+import { DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS } from './authGuard.ts';
 
 /** A randomized, non-maximized window size (avoids a fixed fingerprint + doesn't hog the screen). */
 function randomWindowSizeArg(): string {
@@ -127,4 +129,67 @@ export async function startPersistentSession(
     ],
   });
   return { context, port };
+}
+
+export interface RunLiveSessionOptions {
+  site: Pick<SiteConfig, 'id' | 'name'>;
+  port: number;
+  pid: number;
+  startedAt: string;
+  detectionTimeoutMs?: number;
+  setSession: (session: LiveSession) => void;
+  removeSession: (siteId: string) => void;
+  emitLive: () => void;
+  detectLogin: () => Promise<boolean>;
+  keepAlive: () => Promise<void>;
+  closeContext: () => Promise<void>;
+  onSignal: (signal: NodeJS.Signals, handler: () => void) => void;
+  onContextClose: (handler: () => void) => void;
+  writeStderr: (msg: string) => void;
+  exit: (code: number) => void;
+}
+
+export async function runLiveSession(opts: RunLiveSessionOptions): Promise<void> {
+  opts.setSession({
+    site: opts.site.id,
+    port: opts.port,
+    pid: opts.pid,
+    startedAt: opts.startedAt,
+  });
+  opts.emitLive();
+
+  const shutdown = async () => {
+    opts.removeSession(opts.site.id);
+    await opts.closeContext().catch(() => {});
+    opts.exit(0);
+  };
+  opts.onSignal('SIGINT', () => {
+    void shutdown();
+  });
+  opts.onSignal('SIGTERM', () => {
+    void shutdown();
+  });
+  opts.onContextClose(() => {
+    opts.removeSession(opts.site.id);
+    opts.exit(0);
+  });
+
+  const detectionTimeoutMs = opts.detectionTimeoutMs ?? DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS;
+  let confirmed = false;
+  try {
+    confirmed = await opts.detectLogin();
+  } catch {
+    confirmed = false;
+  }
+
+  if (confirmed) {
+    opts.writeStderr('[bro] login confirmed.\n');
+  } else {
+    const timeoutSeconds = Math.max(1, Math.round(detectionTimeoutMs / 1000));
+    opts.writeStderr(
+      `[bro] couldn't auto-confirm login within ${timeoutSeconds}s -- assuming co-present, session stays live.\n`,
+    );
+  }
+
+  await opts.keepAlive();
 }

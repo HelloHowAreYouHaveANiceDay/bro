@@ -2,6 +2,13 @@ import type { Page } from 'playwright';
 import type { SiteConfig } from './types.ts';
 import { authExpired } from './errors.ts';
 
+export const DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS = 8 * 60 * 1000;
+
+export interface AwaitInteractiveLoginOptions {
+  timeoutMs?: number;
+  fatal?: boolean;
+}
+
 /**
  * Is the current page an authenticated session for this site? Per-site `authedWhen` (G6):
  * - urlNot: we must NOT be on this URL (typically the login page)
@@ -43,12 +50,14 @@ export async function awaitInteractiveLogin(
   page: Page,
   site: SiteConfig,
   log: (msg: string, extra?: Record<string, unknown>) => void,
-  timeoutMs = 8 * 60 * 1000,
-): Promise<void> {
+  opts: AwaitInteractiveLoginOptions = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS;
+  const fatal = opts.fatal ?? true;
   await page.goto(site.homeUrl, { waitUntil: 'domcontentloaded' });
   if (await isAuthed(page, site, 5000)) {
     log('authed (session still live -- no login needed)');
-    return;
+    return true;
   }
   process.stderr.write(
     `\n[bro] Log in to ${site.name} in the opened window (username, password, MFA).\n` +
@@ -60,9 +69,10 @@ export async function awaitInteractiveLogin(
     await sleep(2000);
     if (await isAuthed(page, site, 1500)) {
       log('interactive login detected');
-      return;
+      return true;
     }
   }
+  if (!fatal) return false;
   throw authExpired(site.id);
 }
 

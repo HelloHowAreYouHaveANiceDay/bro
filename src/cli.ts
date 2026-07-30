@@ -8,8 +8,8 @@ import { recordFlow } from './lib/codegen.ts';
 import { authCapture } from './lib/auth.ts';
 import { scaffoldWorkflow } from './lib/scaffold.ts';
 import { runWorkflow } from './lib/runner.ts';
-import { startPersistentSession } from './lib/session.ts';
-import { awaitInteractiveLogin } from './lib/authGuard.ts';
+import { startPersistentSession, runLiveSession } from './lib/session.ts';
+import { awaitInteractiveLogin, DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS } from './lib/authGuard.ts';
 import { readSessions, setSession, removeSession, getSession, probeCDP } from './lib/sessions.ts';
 import { chromium } from 'playwright';
 
@@ -196,27 +196,43 @@ async function main(): Promise<number> {
         const site = loadSite(siteId);
         const { context, port } = await startPersistentSession(site, { channel: cfg.browserChannel });
         const page = context.pages()[0] ?? (await context.newPage());
-        await awaitInteractiveLogin(page, site, () => {});
-        setSession({ site: siteId, port, pid: process.pid, startedAt: new Date().toISOString() });
-        if (!args.json)
-          process.stderr.write(
-            `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
-              `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
-              `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
-          );
-        emit(args, true, { site: siteId, port, status: 'live' });
-        const shutdown = async () => {
-          removeSession(siteId);
-          await context.close().catch(() => {});
-          process.exit(0);
-        };
-        process.on('SIGINT', shutdown);
-        process.on('SIGTERM', shutdown);
-        context.on('close', () => {
-          removeSession(siteId);
-          process.exit(0);
+        await runLiveSession({
+          site,
+          port,
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+          detectionTimeoutMs: DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS,
+          setSession,
+          removeSession,
+          emitLive: () => {
+            if (!args.json)
+              process.stderr.write(
+                `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
+                  `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
+                  `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
+              );
+            emit(args, true, { site: siteId, port, status: 'live' });
+          },
+          detectLogin: () =>
+            awaitInteractiveLogin(page, site, () => {}, {
+              timeoutMs: DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS,
+              fatal: false,
+            }),
+          keepAlive: () => new Promise<void>(() => {}),
+          closeContext: () => context.close(),
+          onSignal: (signal, handler) => {
+            process.on(signal, handler);
+          },
+          onContextClose: (handler) => {
+            context.on('close', handler);
+          },
+          writeStderr: (msg) => {
+            process.stderr.write(msg);
+          },
+          exit: (code) => {
+            process.exit(code);
+          },
         });
-        await new Promise<void>(() => {}); // keep the process alive holding the browser open
         return 0;
       }
       if (sub === 'stop') {
