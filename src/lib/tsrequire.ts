@@ -18,7 +18,16 @@ function registerTsRequire(): void {
   const ext = Module as unknown as { _extensions: Record<string, (m: NodeModule, f: string) => void> };
   ext._extensions['.ts'] = (module, filename) => {
     const src = fs.readFileSync(filename, 'utf8');
-    const { code } = transform(src, { transforms: ['typescript', 'imports'], filePath: filename });
+    // disableESTransforms keeps modern JS syntax (optional chaining `?.`, nullish `??`, etc.) NATIVE
+    // rather than rewriting it into helper calls like `_optionalChain(...)`. Workflows pass code into
+    // `page.evaluate()` that runs in the BROWSER, where those Node-side helpers don't exist -- so
+    // downleveling breaks them ("_optionalChain is not defined"). Node 22+ and modern Chromium both
+    // support the syntax natively; we only need type-stripping + ESM->CJS here.
+    const { code } = transform(src, {
+      transforms: ['typescript', 'imports'],
+      disableESTransforms: true,
+      filePath: filename,
+    });
     (module as unknown as { _compile: (c: string, f: string) => void })._compile(code, filename);
   };
 }
