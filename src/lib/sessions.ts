@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { REPO_ROOT } from './paths.ts';
+import { dataRoot } from './paths.ts';
 
 /**
  * Long-lived browser sessions. A `bro session start <site>` process launches the real browser with
@@ -16,7 +16,10 @@ export interface LiveSession {
 }
 
 function sessionsFile(): string {
-  return path.join(REPO_ROOT, '.bro', 'sessions.json');
+  // The OS data dir (not a cwd-relative REPO_ROOT), so the CLI (`bro session start`, run from a
+  // checkout) and the standalone driver (`bim bro run`, spawned by bim from an arbitrary cwd) agree
+  // on the registry path — otherwise the driver can never attach to a human-started session.
+  return path.join(dataRoot(), 'sessions.json');
 }
 
 export function readSessions(): Record<string, LiveSession> {
