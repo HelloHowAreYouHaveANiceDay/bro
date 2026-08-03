@@ -1,8 +1,11 @@
 import fs from 'node:fs';
-import { chromium } from 'playwright';
 import type { Browser, BrowserContext } from 'playwright';
 import type { SiteConfig } from './types.ts';
+import { loadPlaywright } from './playwright.ts';
 import { authPath, authMetaPath, profileDir } from './paths.ts';
+
+// See context.ts: load via createRequire (runtime-dir-pinned in the SEA), not a static import.
+const { chromium } = loadPlaywright();
 import { authExpired } from './errors.ts';
 import { getSession, probeCDP, pickPort } from './sessions.ts';
 import type { LiveSession } from './sessions.ts';
