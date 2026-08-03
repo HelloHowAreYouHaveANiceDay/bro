@@ -1,14 +1,39 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { BroError } from './errors.ts';
 
-/** repo root (one level above src/) */
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/**
+ * Per-user bro data root — where sites/, profiles/, runtime/ and a standalone .env live.
+ * `BRO_HOME` overrides it (a checkout OR a data dir); otherwise the OS per-user data dir.
+ * Bundle-safe: never uses import.meta.url (undefined inside the SEA blob).
+ */
+export function dataRoot(): string {
+  if (process.env.BRO_HOME) return path.resolve(process.env.BRO_HOME);
+  const base =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '.', 'AppData', 'Local')
+      : path.join(process.env.HOME || '.', '.local', 'share');
+  return path.join(base, 'bro');
+}
 
-/** sites dir — overridable via BRO_SITES_DIR so an OSS user can keep sites outside the repo */
+/** repo root when running from a checkout (dev/tsx): cwd, or BRO_HOME if set. Used only for a repo-local .env. */
+export const REPO_ROOT = process.env.BRO_HOME ? path.resolve(process.env.BRO_HOME) : process.cwd();
+
+/** Where the managed runtime deps (the playwright package) live in standalone mode. */
+export function runtimeDir(): string {
+  return process.env.BRO_RUNTIME ? path.resolve(process.env.BRO_RUNTIME) : path.join(dataRoot(), 'runtime');
+}
+
+/**
+ * sites dir. Precedence: BRO_SITES_DIR → a checkout-local ./sites (dev) → the OS data dir
+ * (standalone default, `<dataRoot>/sites`), so the SEA finds sites with no checkout present.
+ */
 export function sitesDir(): string {
   const override = process.env.BRO_SITES_DIR;
-  return override ? path.resolve(override) : path.join(REPO_ROOT, 'sites');
+  if (override) return path.resolve(override);
+  const cwdSites = path.join(process.cwd(), 'sites');
+  if (fs.existsSync(cwdSites)) return cwdSites;
+  return path.join(dataRoot(), 'sites');
 }
 
 export function siteDir(id: string): string {
@@ -29,15 +54,7 @@ export function authMetaPath(id: string): string {
  */
 export function profileDir(id: string): string {
   const override = process.env.BRO_PROFILE_ROOT;
-  const root = override
-    ? path.resolve(override)
-    : path.join(
-        process.platform === 'win32'
-          ? process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '.', 'AppData', 'Local')
-          : path.join(process.env.HOME || '.', '.local', 'share'),
-        'bro',
-        'profiles',
-      );
+  const root = override ? path.resolve(override) : path.join(dataRoot(), 'profiles');
   return path.join(root, id);
 }
 

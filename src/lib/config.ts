@@ -1,11 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { REPO_ROOT } from './paths.ts';
+import { REPO_ROOT, dataRoot } from './paths.ts';
 
-/** Loads .env (KEY=VALUE lines) into process.env without adding a dotenv dependency. */
+/**
+ * Loads .env (KEY=VALUE lines) into process.env without a dotenv dependency. Checks the checkout
+ * root (dev) then the OS data dir (standalone `<dataRoot>/.env`); real env vars always win.
+ */
 function loadDotEnv(): void {
-  const envPath = path.join(REPO_ROOT, '.env');
-  if (!fs.existsSync(envPath)) return;
+  const candidates = [path.join(REPO_ROOT, '.env'), path.join(dataRoot(), '.env')];
+  const envPath = candidates.find((p) => fs.existsSync(p));
+  if (!envPath) return;
   for (const raw of fs.readFileSync(envPath, 'utf8').split('\n')) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;

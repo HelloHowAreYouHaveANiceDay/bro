@@ -1,9 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isSea } from 'node:sea';
 import type { SiteConfig, Workflow } from './types.ts';
 import { sitesDir, siteDir } from './paths.ts';
 import { noSuchSite, noSuchWorkflow, BroError } from './errors.ts';
+
+/** true when running as the bundled standalone SEA (no tsx loader available for workflow .ts). */
+function seaMode(): boolean {
+  try {
+    return isSea();
+  } catch {
+    return false;
+  }
+}
 
 /** dirs under sites/ that have a site.json (the "_example" template is included). */
 export function listSites(): string[] {
@@ -39,9 +49,16 @@ export function listWorkflows(id: string): string[] {
 export async function loadWorkflow(id: string, name: string): Promise<Workflow> {
   const file = path.join(siteDir(id), 'workflows', `${name}.ts`);
   if (!fs.existsSync(file)) throw noSuchWorkflow(id, name, listWorkflows(id));
-  // absolute Windows path must be a file:// URL for dynamic import (ERR_UNSUPPORTED_ESM_URL_SCHEME otherwise)
-  const mod = (await import(pathToFileURL(file).href)) as { default?: Workflow };
-  const wf = mod.default;
+  let wf: Workflow | undefined;
+  if (seaMode()) {
+    // Standalone SEA: no tsx loader — sucrase-transpile the .ts on require (see tsrequire.ts).
+    const { requireTs } = await import('./tsrequire.ts');
+    wf = (requireTs(file) as { default?: Workflow }).default;
+  } else {
+    // Dev/tsx: absolute Windows path must be a file:// URL for dynamic import
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME otherwise).
+    wf = ((await import(pathToFileURL(file).href)) as { default?: Workflow }).default;
+  }
   if (!wf || typeof wf.run !== 'function') {
     throw new BroError('bad-args', `workflow "${name}" for "${id}" has no default export implementing Workflow`);
   }

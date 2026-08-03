@@ -11,10 +11,11 @@
  * surface -- work without Playwright loaded.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import tty from 'node:tty';
 
 import { BroError } from './lib/errors.ts';
-import { authMetaPath, authPath, profileDir } from './lib/paths.ts';
+import { authMetaPath, authPath, profileDir, runtimeDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
 const VERSION = '0.1.0';
@@ -113,12 +114,16 @@ async function doctor(): Promise<Record<string, unknown>> {
   checks.push({ name: 'runtime:node', ok: nodeOk, detail: `node ${process.version}`,
     ...(nodeOk ? {} : { hint: 'bro needs Node >= 22', fix: 'install Node 22+' }) });
 
-  // Playwright package (bundled with the driver's deps) vs the browser BINARY (a
-  // CLI-managed dependency, like blender for bim-blender -- provisioned on demand).
+  // Standalone SEA: the playwright PACKAGE and its browser BINARY are BOTH managed dependencies,
+  // provisioned once into the runtime dir (resolved via NODE_PATH in sea-entry.ts) -- like Blender
+  // for bim-blender. The exe itself bundles only bro's own code.
+  const rt = runtimeDir();
+  const provisionCmd = `npm i --prefix "${rt}" playwright`;
   let pw: typeof import('playwright') | null = null;
-  try { pw = await import('playwright'); } catch { /* absent */ }
-  checks.push({ name: 'dep:playwright', ok: !!pw, detail: pw ? 'installed' : 'not found', optional: false,
-    ...(pw ? {} : { hint: 'the playwright npm package is missing', fix: 'npm install' }) });
+  try { pw = (await import('./lib/playwright.ts')).loadPlaywright(); } catch { /* absent */ }
+  checks.push({ name: 'dep:playwright', ok: !!pw, detail: pw ? 'installed' : `not found (runtime: ${rt})`, optional: false,
+    ...(pw ? {} : { hint: 'the playwright package is a managed dependency (installed into the bro runtime dir)',
+      fix: 'install it once with the fix_cmd', fix_cmd: provisionCmd }) });
 
   let browserOk = false;
   let browserDetail = 'not checked (playwright missing)';
@@ -133,7 +138,8 @@ async function doctor(): Promise<Record<string, unknown>> {
   }
   checks.push({ name: 'browser:chromium', ok: browserOk, detail: browserDetail, optional: false,
     ...(browserOk ? {} : { hint: 'the Chromium browser binary is a managed dependency',
-      fix: 'install it once with the fix_cmd', fix_cmd: 'npx playwright install chromium' }) });
+      fix: 'install it once with the fix_cmd',
+      fix_cmd: `${provisionCmd} && "${path.join(rt, 'node_modules', '.bin', 'playwright')}" install chromium` }) });
 
   let nSites = 0;
   try { nSites = listSites().filter((s) => s !== '_example').length; } catch { /* none */ }

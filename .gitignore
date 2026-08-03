@@ -27,3 +27,4 @@ bim-bro.exe
 sea/sea-prep.blob
 sea/sea-config.json
 sea/launcher.build.cjs
+sea/driver.bundle.cjs

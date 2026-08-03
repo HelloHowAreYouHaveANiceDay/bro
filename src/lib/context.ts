@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright';
 import type { BrowserContext, Download, Page } from 'playwright';
+import { loadPlaywright } from './playwright.ts';
+
+// Load playwright via createRequire (pinned to the runtime dir in the standalone SEA) rather than a
+// static `import ... from 'playwright'`, which esbuild would compile to a bundle-level require that
+// runs in the SEA's builtin-only require context ("No such built-in module: playwright").
+const { chromium } = loadPlaywright();
 import type { DownloadedFile, SaveOptions, SiteConfig, WorkflowContext } from './types.ts';
 import type { Sink } from './sink.ts';
 import type { RunLog } from './log.ts';
@@ -75,13 +80,26 @@ export function buildContext(args: {
 
     async saveUrl(url: string, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
       const finalName = ensureName(name);
-      const resp = await context.request.get(url);
-      if (!resp.ok()) {
-        throw new Error(`saveUrl: GET ${url} -> HTTP ${resp.status()}`);
-      }
-      const body = await resp.body();
+      // Fetch THROUGH THE LIVE PAGE (real browser network stack: cookies, Referer, Sec-Fetch-*,
+      // genuine TLS/JA3), not context.request.get() -- confirmed (2026-07-28, Inspira HSA) that
+      // some WAF-guarded portals 403 the Node-side APIRequestContext even with matching cookies
+      // + a Referer header, while an in-page fetch() on the exact same URL succeeds. Chunked
+      // base64 round-trip avoids a call-stack blowout on large PDFs (no String.fromCharCode(...spread)).
+      const base64 = await page.evaluate(async (u: string) => {
+        const resp = await fetch(u, { credentials: 'include' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < buf.length; i += chunkSize) {
+          binary += String.fromCharCode(...buf.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+      }, url).catch((e: unknown) => {
+        throw new Error(`saveUrl: in-page fetch ${url} failed: ${e instanceof Error ? e.message : String(e)}`);
+      });
       const tempPath = path.join(tmpDir, finalName);
-      fs.writeFileSync(tempPath, body);
+      fs.writeFileSync(tempPath, Buffer.from(base64, 'base64'));
       return ship(tempPath, finalName, normalizeSaveOpts(opts));
     },
 
