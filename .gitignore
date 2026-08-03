@@ -21,3 +21,9 @@ sites/*
 # OS
 .DS_Store
 Thumbs.db
+
+# bim-bro driver build artifacts (regenerate with `npm run build:driver`)
+bim-bro.exe
+sea/sea-prep.blob
+sea/sea-config.json
+sea/launcher.build.cjs
