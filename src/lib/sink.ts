@@ -57,81 +57,68 @@ function mimeFromName(name: string): string {
   }
 }
 
-function bimBin(): string {
-  return process.env.BRO_BIM_BIN || (process.platform === 'win32' ? 'bim.exe' : 'bim');
+/**
+ * Drive I/O goes through finlib's Drive CLI (the ONE Financial-OS Google token), NOT the
+ * headless-broken `bim-google.exe drive` (DIM-949). Invocation is
+ *   uv run --project <accountant> python <finlib/drive_cli.py> <sub> ...
+ * overridable via env: BRO_UV_BIN, FINOS_ACCOUNTANT_DIR, BRO_FINLIB_DRIVE_CLI.
+ */
+function finlibAccountantDir(): string {
+  return process.env.FINOS_ACCOUNTANT_DIR || 'H:/working/wiki/finos/accountant';
+}
+function finlibDriveCli(): string {
+  // default: sibling of the accountant dir -> <finos>/finlib/drive_cli.py
+  return process.env.BRO_FINLIB_DRIVE_CLI || path.join(finlibAccountantDir(), '..', 'finlib', 'drive_cli.py');
 }
 
-/** Run a bim google command, returning stdout. Throws sink-unavailable on failure. */
-function bim(args: string[]): string {
+/** Run a finlib drive subcommand; return its parsed `result`. Throws sink-unavailable on failure. */
+function finlibDrive(sub: string, args: string[]): Record<string, unknown> {
+  const uv = process.env.BRO_UV_BIN || 'uv';
+  const argv = ['run', '--project', finlibAccountantDir(), 'python', finlibDriveCli(), sub, ...args];
+  let out: string;
   try {
-    return execFileSync(bimBin(), args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    out = execFileSync(uv, argv, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new BroError('sink-unavailable', `bim ${args.join(' ')} failed`, {
-      needsHuman: /auth|login|scope|denied|403|401/i.test(msg),
-      hint: 'ensure `bim google login` has been run with full Drive scope',
-      detail: { stderr: msg.slice(0, 400) },
+    // the CLI prints its {ok:false,error} frame to stdout even on a handled error; prefer that
+    const stdout = (e as { stdout?: string }).stdout ?? '';
+    const parsed = stdout.trim().startsWith('{') ? (JSON.parse(stdout) as Record<string, unknown>) : null;
+    throw new BroError('sink-unavailable', `finlib drive ${sub} failed`, {
+      needsHuman: /auth|login|scope|denied|403|401|token/i.test(msg + stdout),
+      hint: 'finlib Drive token invalid -- refresh via the fin-os Google auth (finlib/auth.py)',
+      detail: { error: parsed?.['error'], stderr: msg.slice(0, 400) },
     });
   }
-}
-
-/** Parse a single-object bim response, unwrapping the {ok,result} envelope if present. */
-function bimObj(out: string): Record<string, unknown> {
   const line = out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{')).pop() ?? '{}';
   const o = JSON.parse(line) as Record<string, unknown>;
-  if (o['ok'] === false) throw new BroError('sink-unavailable', 'bim returned an error', { detail: { error: o['error'] } });
-  return (o['result'] as Record<string, unknown>) ?? o;
+  if (o['ok'] === false) {
+    throw new BroError('sink-unavailable', `finlib drive ${sub} error`, { detail: { error: o['error'] } });
+  }
+  return (o['result'] as Record<string, unknown>) ?? {};
 }
 
 interface DriveEntry { id: string; name: string; mime_type?: string }
 
-/** `bim google drive list --parent <id>` → entries (defensive to raw NDJSON or wrapped output). */
+/** finlib `list` -> entries under a folder. */
 function driveList(parentId: string): DriveEntry[] {
-  const out = bim(['google', 'drive', 'list', '--parent', parentId]);
-  const entries: DriveEntry[] = [];
-  for (const raw of out.split('\n')) {
-    const s = raw.trim();
-    if (!s.startsWith('{')) continue;
-    let o: Record<string, unknown>;
-    try {
-      o = JSON.parse(s);
-    } catch {
-      continue;
-    }
-    const rec = (o['result'] as Record<string, unknown>) ?? o;
-    if (typeof rec['id'] === 'string' && typeof rec['name'] === 'string') {
-      entries.push({ id: rec['id'], name: rec['name'], mime_type: rec['mime_type'] as string | undefined });
-    }
-  }
-  return entries;
+  const res = finlibDrive('list', ['--parent', parentId]);
+  const files = (res['files'] as Array<Record<string, unknown>>) ?? [];
+  return files
+    .filter((f) => typeof f['id'] === 'string' && typeof f['name'] === 'string')
+    .map((f) => ({ id: f['id'] as string, name: f['name'] as string, mime_type: f['mime_type'] as string | undefined }));
 }
 
-/**
- * Find a folder named `name` under `parentId`, creating it if absent. Returns its id.
- * Resilient to the transient empty-response seen from the driver: re-checks via list and
- * retries once, so a swallowed response never yields a duplicate folder or a hard failure.
- */
+/** Find (or create) the folder `name` under `parentId`; returns its id. finlib mkdir is idempotent. */
 function driveEnsureFolder(parentId: string, name: string): string {
-  const folderHere = (): string | undefined =>
-    driveList(parentId).find((e) => e.name === name && e.mime_type === FOLDER_MIME)?.id;
-
-  const existing = folderHere();
-  if (existing) return existing;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = bimObj(bim(['google', 'drive', 'mkdir', '--name', name, '--parent', parentId]));
-    const id = res['file_id'] ?? res['id'];
-    if (typeof id === 'string' && id) return id;
-    // empty response: the folder may still have been created — re-check before retrying
-    const now = folderHere();
-    if (now) return now;
-  }
-  throw new BroError('sink-unavailable', `drive mkdir "${name}" returned no id after retry`, { detail: { parentId } });
+  const res = finlibDrive('mkdir', ['--parent', parentId, '--name', name]);
+  const id = res['id'];
+  if (typeof id === 'string' && id) return id;
+  throw new BroError('sink-unavailable', `drive mkdir "${name}" returned no id`, { detail: { parentId } });
 }
 
 /**
  * Drive raw/ sink. Resolves (creating as needed) raw/{YYYY}/{MM}/{source}/, dedups by filename,
- * and uploads via `bim google drive upload --parent`. Requires the v0.4.0 driver + full Drive scope.
+ * and uploads via finlib's Drive CLI (the ONE fin-os Google token; no bim-google).
  */
 class DriveRawSink implements Sink {
   readonly kind = 'drive-raw';
@@ -160,14 +147,10 @@ class DriveRawSink implements Sink {
     if (existing) {
       return { dest: `drive:${existing.id}`, bytes, skipped: true };
     }
-    const res = bimObj(bim(['google', 'drive', 'upload', '--parent', parent, '--input', tempPath, '--name', name, '--mime-type', mimeFromName(name)]));
-    let id = (res['file_id'] ?? res['id'] ?? '') as string;
-    if (!id) {
-      // transient empty response: the upload may still have landed — re-check by name
-      id = driveList(parent).find((e) => e.name === name)?.id ?? '';
-      if (!id) throw new BroError('sink-unavailable', `drive upload "${name}" returned no id`, { detail: { parent } });
-    }
-    return { dest: `drive:${id}`, bytes, skipped: false };
+    const res = finlibDrive('upload', ['--parent', parent, '--name', name, '--input', tempPath, '--mime', mimeFromName(name)]);
+    const id = (res['id'] ?? '') as string;
+    if (!id) throw new BroError('sink-unavailable', `drive upload "${name}" returned no id`, { detail: { parent } });
+    return { dest: `drive:${id}`, bytes, skipped: res['skipped'] === true };
   }
 }
 
