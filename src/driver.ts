@@ -13,9 +13,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import tty from 'node:tty';
+import { fileURLToPath } from 'node:url';
 
 import { BroError } from './lib/errors.ts';
-import { authMetaPath, authPath, profileDir, runtimeDir } from './lib/paths.ts';
+import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
 const VERSION = '0.1.0';
@@ -105,7 +106,7 @@ function describeDoc(): Record<string, unknown> {
   };
 }
 
-async function doctor(): Promise<Record<string, unknown>> {
+export async function doctor(): Promise<Record<string, unknown>> {
   const checks: Array<Record<string, unknown>> = [];
   const nodeOk = (() => {
     const major = Number(process.versions.node.split('.')[0]);
@@ -141,12 +142,37 @@ async function doctor(): Promise<Record<string, unknown>> {
       fix: 'install it once with the fix_cmd',
       fix_cmd: `${provisionCmd} && "${path.join(rt, 'node_modules', '.bin', 'playwright')}" install chromium` }) });
 
+  // Distinguish three cases: (a) sites dir absent = not-yet-configured (optional/advisory),
+  // (b) sites dir present but unreadable = genuine fault (hard failure), (c) healthy.
   let nSites = 0;
-  try { nSites = listSites().filter((s) => s !== '_example').length; } catch { /* none */ }
-  checks.push({ name: 'config:sites', ok: nSites > 0, detail: `${nSites} site(s) configured`,
-    ...(nSites > 0 ? {} : { hint: 'no sites yet', fix: 'bro auth <site> to add one' }) });
+  let sitesOk = false;
+  let sitesOptional = false;
+  let sitesBroken = false;
+  const sitesRoot = sitesDir();
+  if (!fs.existsSync(sitesRoot)) {
+    sitesOptional = true; // not yet configured -- setup guidance, not a fault
+  } else {
+    try {
+      nSites = listSites().filter((s) => s !== '_example').length;
+      sitesOk = nSites > 0;
+      if (!sitesOk) sitesOptional = true; // dir present but empty: still a setup note
+    } catch {
+      sitesBroken = true; // dir exists but can't be read: genuine fault
+    }
+  }
+  checks.push({
+    name: 'config:sites',
+    ok: sitesOk,
+    optional: sitesOptional,
+    detail: sitesBroken ? 'sites directory exists but cannot be read' : `${nSites} site(s) configured`,
+    ...(sitesOk ? {} : {
+      hint: sitesBroken ? 'check permissions on the sites directory' : 'no sites yet',
+      fix: 'bro auth <site> to add one',
+    }),
+  });
 
-  const ok = checks.every((c) => c.ok);
+  // optional checks are advisory only; they do not affect the overall driver health.
+  const ok = checks.filter((c) => !c.optional).every((c) => c.ok);
   return { ok, detail: ok ? 'bro driver ready' : 'one or more checks failed', checks };
 }
 
@@ -298,7 +324,22 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  writeFrame({ jsonrpc: '2.0', error: { code: -32603, message: String(err), data: { kind: 'runtime' } }, id: 0 });
-  process.exit(1);
-});
+// Run main() only when this module is the direct entry point, not when imported by tests or other
+// modules. In the SEA (CJS bundle): import.meta.url is undefined at runtime so fileURLToPath throws
+// -> caught -> returns true. In tsx/vitest (ESM): match argv[1] against this file's path.
+function isDirectEntry(): boolean {
+  try {
+    const thisPath = fileURLToPath(import.meta.url);
+    const argv1 = process.argv[1] ?? '';
+    return argv1 === thisPath || argv1.replace(/\.(m?js)$/, '') === thisPath.replace(/\.ts$/, '');
+  } catch {
+    return true; // CJS/SEA: import.meta.url unavailable -> this IS the entry
+  }
+}
+
+if (isDirectEntry()) {
+  main().catch((err) => {
+    writeFrame({ jsonrpc: '2.0', error: { code: -32603, message: String(err), data: { kind: 'runtime' } }, id: 0 });
+    process.exit(1);
+  });
+}
