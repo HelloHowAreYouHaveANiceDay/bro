@@ -25,14 +25,37 @@ export function runtimeDir(): string {
 }
 
 /**
- * sites dir. Precedence: BRO_SITES_DIR → a checkout-local ./sites (dev) → the OS data dir
- * (standalone default, `<dataRoot>/sites`), so the SEA finds sites with no checkout present.
+ * sites dir. Precedence: BRO_SITES_DIR env → cwd/sites (checkout/dev, writes discovery cache) →
+ * <dataRoot>/sites-dir cache file (standalone SEA after first checkout run) → <dataRoot>/sites.
+ *
+ * The cache file bridges the checkout and the standalone SEA: running `bro` once from the checkout
+ * writes the absolute sites path to `<dataRoot>/sites-dir`; every subsequent SEA invocation (from
+ * any cwd) reads that file and finds the configured sites without a checkout present.
  */
 export function sitesDir(): string {
   const override = process.env.BRO_SITES_DIR;
   if (override) return path.resolve(override);
+
+  // Dev: running from the checkout -- discover sites/ adjacent to cwd and persist the path so that
+  // the standalone SEA (which may run from any cwd) finds the same sites later.
   const cwdSites = path.join(process.cwd(), 'sites');
-  if (fs.existsSync(cwdSites)) return cwdSites;
+  if (fs.existsSync(cwdSites)) {
+    try {
+      fs.mkdirSync(dataRoot(), { recursive: true });
+      fs.writeFileSync(path.join(dataRoot(), 'sites-dir'), cwdSites, 'utf8');
+    } catch { /* best-effort: ignore write errors (read-only data dir, etc.) */ }
+    return cwdSites;
+  }
+
+  // Standalone/SEA: look for the cached path written by a prior checkout run.
+  const cachePath = path.join(dataRoot(), 'sites-dir');
+  if (fs.existsSync(cachePath)) {
+    const cached = fs.readFileSync(cachePath, 'utf8').trim();
+    if (cached && fs.existsSync(cached)) return path.resolve(cached);
+  }
+
+  // Final fallback: the documented data-root location (absent on most machines unless populated
+  // externally, e.g. via symlink or BRO_HOME pointing at the checkout).
   return path.join(dataRoot(), 'sites');
 }
 
