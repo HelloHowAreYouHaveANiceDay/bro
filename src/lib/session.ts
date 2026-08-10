@@ -64,6 +64,20 @@ export async function openSession(
     return { context, close: async () => { await context.close(); } };
   }
 
+  // Public sites have no stored credentials -- launch a fresh context with no storageState.
+  if (site.public) {
+    const browser = await chromium.launch({
+      channel: opts.channel,
+      headless: !(opts.headed || site.headed),
+      args: ['--disable-blink-features=AutomationControlled'],
+    });
+    const context = await browser.newContext({ acceptDownloads: true, viewport: null });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+    return { browser, context, close: async () => { await context.close(); await browser.close(); } };
+  }
+
   const statePath = authPath(site.id);
   if (!fs.existsSync(statePath)) throw authExpired(site.id);
 

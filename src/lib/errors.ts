@@ -3,6 +3,7 @@
  */
 export type BroErrorKind =
   | 'auth-expired'
+  | 'not-ready'
   | 'no-such-site'
   | 'no-such-workflow'
   | 'no-downloads'
@@ -48,6 +49,14 @@ export function authExpired(siteId: string): BroError {
   return new BroError('auth-expired', `auth for "${siteId}" is expired or missing`, {
     needsHuman: true,
     hint: `run: bro auth ${siteId}`,
+    detail: { site: siteId },
+  });
+}
+
+export function notReady(siteId: string): BroError {
+  return new BroError('not-ready', `site "${siteId}" did not reach a ready state`, {
+    retriable: true,
+    hint: `check the site's authedWhen readiness predicate or network connectivity`,
     detail: { site: siteId },
   });
 }

@@ -18,6 +18,14 @@ an agent can author, test, and run workflows autonomously.
     `.bro/runs/<id>/` and repair the workflow.
   - `no-such-site` / `no-such-workflow` → `detail.available` lists valid values.
 
+## Public sites (no identity)
+
+Sites that render via JavaScript but require no login use `public: true` in `site.json`. No
+`auth.json`, no `bro auth` step -- the browser launches fresh. If `authedWhen` is set it acts as a
+readiness predicate (wait until the app settles); a failure raises `not-ready` (retriable), never
+`auth-expired`. Navigation aborts (`ERR_ABORTED`) during the initial load are silently swallowed
+since redirect-heavy SPAs abort their own pending navigations.
+
 ## Sessions (banks / hardened sites)
 
 Some sites (banks) can't have their session stored for unattended runs, and a fresh automated
