@@ -1,9 +1,15 @@
 // Tests for AC3 and AC4 (doctor() checks and e2e site discovery)
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { doctor } from './driver.ts';
+
+// Mock playwright so these tests are not coupled to chromium installation state.
+// The tests exercise config:sites behavior; playwright presence is orthogonal.
+vi.mock('./lib/playwright.ts', () => ({
+  loadPlaywright: () => ({ chromium: { executablePath: () => process.execPath } }),
+}));
 
 type Check = { name: string; ok: boolean; optional?: boolean; detail?: string };
 type DoctorResult = { ok: boolean; detail: string; checks: Check[] };
