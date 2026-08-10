@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import type { SiteConfig } from './types.ts';
-import { authExpired } from './errors.ts';
+import { authExpired, notReady } from './errors.ts';
 
 export const DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS = 8 * 60 * 1000;
 
@@ -33,9 +33,22 @@ export async function isAuthed(page: Page, site: SiteConfig, selectorTimeoutMs =
 
 /**
  * Navigate to the authenticated home and confirm we're still logged in.
- * Throws auth-expired (needsHuman) on failure -- never silently proceeds.
+ * For private sites: throws auth-expired (needsHuman) on failure.
+ * For public sites: navigates with waitUntil:'commit' so self-redirecting SPAs don't abort;
+ * if authedWhen is set it is treated as a readiness predicate and failure throws not-ready.
  */
 export async function authGuard(page: Page, site: SiteConfig): Promise<void> {
+  if (site.public) {
+    try {
+      await page.goto(site.homeUrl, { waitUntil: 'commit' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // An app that redirects itself during load is normal (e.g. CSRF-bootstrapping portals).
+      if (!msg.includes('ERR_ABORTED')) throw err;
+    }
+    if (site.authedWhen && !(await isAuthed(page, site, 8000))) throw notReady(site.id);
+    return;
+  }
   await page.goto(site.homeUrl, { waitUntil: 'domcontentloaded' });
   if (!(await isAuthed(page, site, 8000))) throw authExpired(site.id);
 }

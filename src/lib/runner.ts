@@ -114,7 +114,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
     }
 
     const files = result as DownloadedFile[];
-    if (!opts.dryRun && site.browser !== 'persistent') await persistState(site, session.context, opts.stampIso);
+    if (!opts.dryRun && site.browser !== 'persistent' && !site.public) await persistState(site, session.context, opts.stampIso);
     log.line('done', { count: files.length });
 
     return {

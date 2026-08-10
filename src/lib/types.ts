@@ -48,6 +48,14 @@ export interface SiteConfig {
    * recognition carry across logins.
    */
   interactive?: boolean;
+  /**
+   * Public site: no stored credentials, no login required. The browser launches fresh with no
+   * storageState -- no auth.json, no `bro auth` step. If `authedWhen` is set it is treated as a
+   * readiness predicate (wait until the app finishes loading); a failure throws not-ready, never
+   * auth-expired. Use for sites that render via JavaScript but require no identity (e.g. public
+   * government portals).
+   */
+  public?: boolean;
 }
 
 /** One structured row a `read` workflow scraped from the authenticated DOM (JSON, not a file). */
