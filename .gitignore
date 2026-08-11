@@ -18,6 +18,15 @@ sites/*
 !sites/_example/
 !sites/_example/**
 
+# Personal scratch scripts live in local/ -- see local/README.md. That folder has
+# its own .gitignore keeping everything but the README, so a clone gets a usable
+# scratch space without carrying anyone else's one-offs. This repo is PUBLIC and
+# bro is a workflow runner, not a scraper library.
+# Belt-and-braces: catch scratch scripts dropped at the root out of habit.
+scrape-*.mjs
+diag-*.mjs
+search-web.mjs
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,0 +1,5 @@
+# Everything in local/ is yours and stays out of git.
+# Only this file and the README are tracked, so the folder survives a clone.
+*
+!.gitignore
+!README.md
