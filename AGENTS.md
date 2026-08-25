@@ -65,6 +65,38 @@ Gotcha: keep the `page.evaluate` body free of NAMED inner functions — tsx/esbu
 a `__name` helper that is undefined in the browser context (`ReferenceError: __name is not defined`);
 inline callback arrows are fine.
 
+## Schwab gotchas (Order Status export + sessions)
+
+- **`bro run` alone uses an EPHEMERAL browser and re-prompts login every run.** For iterative
+  work (building/debugging a workflow) use `bro session start schwab` once (persistent CDP,
+  one login, reused by every subsequent `bro run`). Schwab's trade/order pages ALSO trigger a
+  step-up re-auth even in an otherwise-authed session -- that is the "second login", one-time
+  per session, completed in the live window.
+- **`BRO_SINK=local`** writes CSVs to the local ledger tree and bypasses the Drive sink -- use
+  it when the finlib/bim-google Google token is dead (`sink-unavailable: drive mkdir failed`).
+- **Order Status grid is shadow-DOM** (`stos-*` web components): `page.evaluate` textContent
+  and even Playwright `innerText` on the cells return empty. Do NOT scrape -- use the page's
+  **Export button -> CSV** (`sites/schwab/workflows/orders.ts`, the same pattern as positions).
+- **Export raises a shadow-DOM caution modal** (`sdps-modal`, "Export Order Status Data"); the
+  download fires only after its **OK**. `getByRole('dialog')` does NOT match `sdps-modal`, and
+  OK is a light-DOM `sdps-button` (no `role=button`) with a hidden duplicate -- match the
+  VISIBLE one: `page.locator('sdps-modal').filter({hasText:/Export Order Status/i})
+  .locator('button, sdps-button').filter({hasText:/^OK$/}).filter({visible:true})`.
+- **The export->download needs a HEALTHY session.** A long-idle/degraded one ("Your Session
+  Will Expire Soon -- error extending your session") silently stops firing downloads while grid
+  reads still work; the tell is `waitForEvent('download')` timing out on every account. Restart
+  with `bro session start schwab`.
+- **Multi-account is WIP.** There is no "all accounts" view. Iterating the account selector
+  reads each account's order COUNT fine, but the export keeps returning the PERSISTED account
+  regardless of the switch (all accounts come back with identical rows). Single/default-account
+  export is reliable; `--accounts=all` / `--only=<acct>` are not yet trustworthy -- the account
+  switch (`selectAccount`) does not change what the export downloads. Fix needed before relying
+  on multi-account.
+- **File month = `ctx.params.ym`, not the CSV's as-of date.** A `positions`/`orders` pull with
+  no `--month` stamps the file with the param default, which can be the WRONG month folder
+  (a today pull landed as `2026-07`). Downstream pickers that key on the month string then
+  ignore the fresh file -- pass `--month <YYYY-MM>` or move the file to the correct folder.
+
 ## Hard rule — read-only in live financial accounts
 
 Authoring and `test` drive the **real** logged-in account. Use navigation, snapshot/read, and
