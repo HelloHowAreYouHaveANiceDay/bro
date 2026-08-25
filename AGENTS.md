@@ -86,12 +86,13 @@ inline callback arrows are fine.
   Will Expire Soon -- error extending your session") silently stops firing downloads while grid
   reads still work; the tell is `waitForEvent('download')` timing out on every account. Restart
   with `bro session start schwab`.
-- **Multi-account is WIP.** There is no "all accounts" view. Iterating the account selector
-  reads each account's order COUNT fine, but the export keeps returning the PERSISTED account
-  regardless of the switch (all accounts come back with identical rows). Single/default-account
-  export is reliable; `--accounts=all` / `--only=<acct>` are not yet trustworthy -- the account
-  switch (`selectAccount`) does not change what the export downloads. Fix needed before relying
-  on multi-account.
+- **Multi-account works, but the account switch is finicky.** There is no "all accounts" view;
+  `--accounts=all` / `--only=<acct>` iterate the `sdps-account-selector`. The dropdown is a
+  `button[aria-haspopup]` toggle that MUST be clicked to open the panel first -- only then do the
+  option anchors (`<a href="javascript:void(0)">`) become visible/clickable. Clicking the
+  component or an inner text span does nothing (options stay `visible:false`), and the symptom is
+  that EVERY export silently returns the persisted account's rows (identical data tagged under
+  each account). Open via the toggle, then click the option anchor; see `selectAccount()`.
 - **File month = `ctx.params.ym`, not the CSV's as-of date.** A `positions`/`orders` pull with
   no `--month` stamps the file with the param default, which can be the WRONG month folder
   (a today pull landed as `2026-07`). Downstream pickers that key on the month string then
