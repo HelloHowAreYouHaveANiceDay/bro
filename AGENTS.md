@@ -97,6 +97,22 @@ inline callback arrows are fine.
   no `--month` stamps the file with the param default, which can be the WRONG month folder
   (a today pull landed as `2026-07`). Downstream pickers that key on the month string then
   ignore the fresh file -- pass `--month <YYYY-MM>` or move the file to the correct folder.
+- **A re-pull with a filename that already exists returns `"skipped": true` and writes NOTHING**
+  (the local sink dedups by filename). So `bro run schwab positions --month 2026-08` a second time
+  in the same month fetches fresh data then silently discards it, leaving the stale CSV in place --
+  and the dashboard rebuild then reports success on old shares. Confirmed 2026-08-27: a fresh pull
+  said `skipped:true` and the CSV stayed 2 days old. Fix: **`rm` the existing month CSV first**,
+  then re-pull (it writes), then rebuild. Always check the CSV's `as of ...` header line after a pull.
+- **Cost-basis tax LOTS (`sites/schwab/workflows/lots.ts`, read-only): the lot table is behind a
+  per-symbol drill-down on the Positions grid, not a URL.** Mechanics that work: wait for the symbol
+  to render (the grid is slow; symbols are `<th>` row-headers, not `<td>`); each holding is a
+  `tr.parent-pos` whose **cost-basis value is a `<button>`/`sdps-button` (aria-label = the $ amount)
+  that EXPANDS the lot child-rows** -- click it with a TRUSTED Playwright click by that aria-label
+  (`evaluate().click()` on the custom element does not fire the expander, same class of bug as the
+  export-modal OK). Then scrape rows carrying an **acquisition date (MM/DD/YYYY)** -- that uniquely
+  identifies lot rows (Open Date / Qty / Cost/Share / Mkt Val / Cost Basis / Gain / Holding term).
+  The Positions "Cost Basis" URL guesses (`/app/accounts/cost-basis/`) are dead shells; drill from
+  `/app/accounts/positions/`.
 
 ## Hard rule — read-only in live financial accounts
 
