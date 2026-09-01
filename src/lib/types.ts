@@ -81,12 +81,20 @@ export interface SaveOptions {
   ym?: string;
 }
 
+export interface ReachTarget {
+  text?: RegExp | string;
+  role?: string;
+  url?: string;
+}
+
 /** Injected into a workflow's run(). The page is ALREADY authenticated. */
 export interface WorkflowContext {
   page: Page;
   context: BrowserContext;
   site: SiteConfig;
   params: Record<string, string>;
+  /** Reach an in-app destination by preferring a real click over a bare goto when possible. */
+  reach(target: ReachTarget): Promise<void>;
   /** Stage a Playwright download to the sink under a deterministic name. Returns the entry.
    * `opts` may be a bare invoiceId string, or { invoiceId, source } to file under a per-account source. */
   save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;

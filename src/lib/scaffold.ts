@@ -30,8 +30,9 @@ const workflow: Workflow = {
 
   async run(ctx: WorkflowContext): Promise<DownloadedFile[]> {
     const files: DownloadedFile[] = [];
-    await ctx.page.goto(ctx.site.homeUrl, { waitUntil: 'domcontentloaded' });
+    await ctx.reach({ url: ctx.site.homeUrl });
 
+    // TODO: prefer ctx.reach({ text: /Statements/i }) for in-app routes; bare goto can log out token-in-URL SPAs.
     // TODO: enumerate rows for ctx.params.ym and download each. Two capture modes:
     //   (a) real download:  const dl = await ctx.page.waitForEvent('download', () => row.click());
     //                       files.push(await ctx.save(dl, \`\${ctx.site.source}-\${id}.pdf\`, id));
