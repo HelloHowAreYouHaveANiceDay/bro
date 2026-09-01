@@ -25,6 +25,23 @@ export interface Session {
   close(): Promise<void>;
 }
 
+const LIVE_SESSION_CLOSE_WARNING =
+  '[bro] refusing browser.close() on a live CDP session -- connection will drop on exit';
+
+function protectLiveBrowser(browser: Browser): Browser {
+  return new Proxy(browser, {
+    get(target, prop, receiver) {
+      if (prop === 'close') {
+        return async () => {
+          console.warn(LIVE_SESSION_CLOSE_WARNING);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 /**
  * Launch a browser and open a context pre-loaded with the site's saved storageState.
  * Throws auth-expired if no auth.json exists yet.
@@ -37,10 +54,10 @@ export async function openSession(
   //    Never close the externally-owned browser -- the session stays alive for the next run.
   const live = getSession(site.id);
   if (live && (await probeCDP(live.port))) {
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${live.port}`);
-    const context = browser.contexts()[0] ?? (await browser.newContext());
+    const rawBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${live.port}`);
+    const context = rawBrowser.contexts()[0] ?? (await rawBrowser.newContext());
     return {
-      browser,
+      browser: protectLiveBrowser(rawBrowser),
       context,
       close: async () => {
         /* keep the live session alive; our CDP connection drops when this process exits */
