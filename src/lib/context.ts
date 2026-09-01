@@ -1,20 +1,50 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BrowserContext, Download, Page } from 'playwright';
+import type { BrowserContext, Download, Locator, Page } from 'playwright';
 import { loadPlaywright } from './playwright.ts';
 
 // Load playwright via createRequire (pinned to the runtime dir in the standalone SEA) rather than a
 // static `import ... from 'playwright'`, which esbuild would compile to a bundle-level require that
 // runs in the SEA's builtin-only require context ("No such built-in module: playwright").
 const { chromium } = loadPlaywright();
-import type { DownloadedFile, SaveOptions, SiteConfig, WorkflowContext } from './types.ts';
+import type { DownloadedFile, ReachTarget, SaveOptions, SiteConfig, WorkflowContext } from './types.ts';
 import type { Sink } from './sink.ts';
 import type { RunLog } from './log.ts';
+import { humanPause } from './human.ts';
 import { sanitizeFilename } from './paths.ts';
+
+type ReachRole = Parameters<Page['getByRole']>[0];
+
+const DEFAULT_REACH_ROLES: ReachRole[] = ['link', 'button', 'menuitem', 'tab'];
 
 /** A bare string arg to save()/saveUrl() is shorthand for { invoiceId }. */
 function normalizeSaveOpts(opts?: string | SaveOptions): SaveOptions {
   return typeof opts === 'string' ? { invoiceId: opts } : (opts ?? {});
+}
+
+function reachLocators(page: Page, target: ReachTarget): Locator[] {
+  if (target.role) {
+    return [target.text === undefined ? page.getByRole(target.role as ReachRole) : page.getByRole(target.role as ReachRole, { name: target.text })];
+  }
+  if (target.text === undefined) return [];
+  return DEFAULT_REACH_ROLES.map((role) => page.getByRole(role, { name: target.text }));
+}
+
+async function firstVisible(locator: Locator): Promise<Locator | null> {
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false)) return candidate;
+  }
+  return null;
+}
+
+async function findReachAffordance(page: Page, target: ReachTarget): Promise<Locator | null> {
+  for (const locator of reachLocators(page, target)) {
+    const candidate = await firstVisible(locator);
+    if (candidate) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -70,6 +100,19 @@ export function buildContext(args: {
     site,
     params,
     log: (msg, extra) => log.line('workflow', { msg, ...(extra ?? {}) }),
+
+    async reach(target: ReachTarget): Promise<void> {
+      const affordance = await findReachAffordance(page, target);
+      if (affordance) {
+        await humanPause();
+        await affordance.click();
+        await humanPause();
+        return;
+      }
+      if (!target.url) throw new Error('reach: no visible navigation control matched target and no fallback url was provided');
+      await humanPause();
+      await page.goto(target.url, { waitUntil: 'domcontentloaded' });
+    },
 
     async save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
       const finalName = ensureName(name);

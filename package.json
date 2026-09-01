@@ -11,6 +11,7 @@
     "bro": "tsx src/cli.ts",
     "driver": "tsx src/driver.ts",
     "build:driver": "node sea/build.mjs",
+    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

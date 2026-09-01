@@ -49,6 +49,7 @@ export async function authGuard(page: Page, site: SiteConfig): Promise<void> {
     if (site.authedWhen && !(await isAuthed(page, site, 8000))) throw notReady(site.id);
     return;
   }
+  // Auth probe only; workflows should use ctx.reach() for in-app navigation instead of bare goto.
   await page.goto(site.homeUrl, { waitUntil: 'domcontentloaded' });
   if (!(await isAuthed(page, site, 8000))) throw authExpired(site.id);
 }

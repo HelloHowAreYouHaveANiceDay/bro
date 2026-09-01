@@ -65,6 +65,12 @@ Gotcha: keep the `page.evaluate` body free of NAMED inner functions — tsx/esbu
 a `__name` helper that is undefined in the browser context (`ReferenceError: __name is not defined`);
 inline callback arrows are fine.
 
+## Token-in-URL SPA navigation
+
+For token-in-url SPA sites, never use a bare goto to an in-app route. Use `ctx.reach(...)` so bro
+clicks visible in-app navigation and lets the live token flow forward inside the SPA. GEICO is the
+worked example: a bare `page.goto()` to a tokenless or stale-token app URL is treated as a logout.
+
 ## Schwab gotchas (Order Status export + sessions)
 
 - **`bro run` alone uses an EPHEMERAL browser and re-prompts login every run.** For iterative
@@ -130,5 +136,6 @@ the same explicit, per-domain sign-off.
 
 ## Conventions
 
+- Verification: `npm run build` and `npm test`.
 - ASCII-only output in any script; no secrets in logs.
 - Never commit `auth.json`, `auth.meta.json`, or `.env` (gitignored; CI guards it too).
