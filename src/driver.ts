@@ -60,6 +60,7 @@ function describeDoc(): Record<string, unknown> {
           { name: 'site', type: 'string', required: true, positional: true, help: 'site id' },
           { name: 'workflow', type: 'string', required: true, positional: true, help: 'workflow name' },
           { name: 'month', type: 'string', help: 'target month YYYY-MM (default: previous)' },
+          { name: 'dateStamp', type: 'string', help: 'stamp saved filenames with YYYY-MM-DD to avoid snapshot collisions' },
           { name: 'headed', type: 'bool', help: 'run headed (visible browser)' },
         ],
         output: 'json',
@@ -71,6 +72,7 @@ function describeDoc(): Record<string, unknown> {
           { name: 'site', type: 'string', required: true, positional: true },
           { name: 'workflow', type: 'string', required: true, positional: true },
           { name: 'month', type: 'string' },
+          { name: 'dateStamp', type: 'string' },
         ],
         output: 'json',
         supports_dry_run: true,
@@ -188,6 +190,13 @@ function siteList(): Record<string, unknown> {
   return { sites };
 }
 
+function localDateStamp(now: Date): string {
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
   switch (method) {
     case 'describe':
@@ -214,11 +223,18 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       if (!site || !workflow) throw new BroError('bad-args', `${method} requires site + workflow`);
       const { runWorkflow } = await import('./lib/runner.ts');
       const now = new Date();
+      const requestedDateStamp = params.dateStamp ?? params['date-stamp'];
       const manifest = await runWorkflow({
         siteId: site,
         workflowName: workflow,
         cliParams: params as Record<string, string>,
         month: params.month ? String(params.month) : undefined,
+        dateStamp:
+          requestedDateStamp === true
+            ? localDateStamp(now)
+            : typeof requestedDateStamp === 'string'
+              ? requestedDateStamp
+              : undefined,
         headed: params.headed === true || params.headed === 'true',
         dryRun: method === 'test',
         stampIso: now.toISOString().replace(/[:.]/g, '-'),

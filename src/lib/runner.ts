@@ -29,6 +29,7 @@ export interface RunOptions {
   workflowName: string;
   cliParams: Record<string, string>;
   month?: string;
+  dateStamp?: string;
   headed?: boolean;
   dryRun?: boolean;
   /** ISO stamp supplied by the CLI (Date is created at the process entrypoint, not in lib) */
@@ -42,6 +43,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
   const wf = await loadWorkflow(opts.siteId, opts.workflowName);
   const cfg = loadConfig();
   const { year, month, ym } = resolveMonth(opts.month, opts.now);
+  const defaultDateStamp = opts.dateStamp && /^\d{4}-\d{2}-\d{2}$/.test(opts.dateStamp) ? opts.dateStamp : undefined;
 
   // assemble params: injected month fields + declared defaults + CLI overrides
   const params: Record<string, string> = { year, month, ym, ...opts.cliParams };
@@ -87,7 +89,20 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
     log.line('authed', { url: page.url() });
 
     const tmpDir = path.join(REPO_ROOT, '.bro', 'tmp', runId(opts.stampIso, opts.siteId, opts.workflowName));
-    const ctx = buildContext({ page, context: session.context, site, params, sinkFor, defaultSource: site.source, defaultYear: year, defaultMonth: month, log, tmpDir, browserChannel: cfg.browserChannel });
+    const ctx = buildContext({
+      page,
+      context: session.context,
+      site,
+      params,
+      sinkFor,
+      defaultSource: site.source,
+      defaultYear: year,
+      defaultMonth: month,
+      defaultDateStamp,
+      log,
+      tmpDir,
+      browserChannel: cfg.browserChannel,
+    });
     const result = await wf.run(ctx);
 
     const minExpected = wf.minExpected ?? 1;

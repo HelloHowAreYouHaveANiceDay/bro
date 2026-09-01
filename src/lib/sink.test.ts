@@ -27,18 +27,19 @@ describe('LocalSink', () => {
     const sink = createSink(cfg(), 'cloudflare', '2026', '06');
     const res = await sink.put(tempFile, 'cloudflare-INV1.pdf');
     expect(res.skipped).toBe(false);
+    expect(res.status).toBe('saved');
     expect(res.bytes).toBe(7);
     expect(res.dest.replace(/\\/g, '/')).toContain('out/2026/06/cloudflare/cloudflare-INV1.pdf');
     expect(fs.existsSync(res.dest)).toBe(true);
   });
 
-  it('is idempotent — a second put of the same name skips (no overwrite)', async () => {
+  it('is idempotent - a second put of the same name skips without overwriting', async () => {
     const sink = createSink(cfg(), 'cloudflare', '2026', '06');
     await sink.put(tempFile, 'cloudflare-INV1.pdf');
-    // change the staged content; a skip must NOT overwrite
     fs.writeFileSync(tempFile, 'DIFFERENT-LONGER');
     const res2 = await sink.put(tempFile, 'cloudflare-INV1.pdf');
     expect(res2.skipped).toBe(true);
+    expect(res2.status).toBe('reused');
     expect(fs.readFileSync(res2.dest, 'utf8')).toBe('PDFDATA');
   });
 });

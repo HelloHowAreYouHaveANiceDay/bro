@@ -139,3 +139,63 @@ describe('buildContext reach', () => {
     expect(page.gotoCalls).not.toContain(new URL('./documents.html?token=live', site.homeUrl).toString());
   });
 });
+
+describe('buildContext save', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'bro-save-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('date-stamps a month-scoped snapshot filename and returns saved status', async () => {
+    const site: SiteConfig = {
+      id: 'schwab',
+      name: 'Schwab',
+      loginUrl: 'https://example.com/login',
+      homeUrl: 'https://example.com/home',
+      source: 'schwab',
+    };
+    const ctx = buildContext({
+      page: {} as Page,
+      context: {} as BrowserContext,
+      site,
+      params: {},
+      sinkFor: () => ({
+        kind: 'local',
+        location: () => root,
+        put: async (_tempPath: string, name: string) => ({
+          dest: path.join(root, name),
+          bytes: 16,
+          skipped: false,
+          status: 'saved',
+        }),
+      }),
+      defaultSource: site.source,
+      defaultYear: '2026',
+      defaultMonth: '08',
+      defaultDateStamp: '2026-08-31',
+      log: new RunLog('save-test', { mirror: false }),
+      tmpDir: path.join(root, 'tmp'),
+      browserChannel: 'chromium',
+    });
+
+    const file = await ctx.save(
+      {
+        saveAs: async (dest: string) => {
+          fs.writeFileSync(dest, 'AS OF 2026-08-31');
+        },
+      } as Download,
+      'schwab-positions-2026-08.csv',
+      { invoiceId: '2026-08' },
+    );
+
+    expect(file.skipped).toBe(false);
+    expect(file.status).toBe('saved');
+    expect(file.name).toBe('schwab-positions-2026-08-31.csv');
+    expect(file.dest.replace(/\\/g, '/')).toContain('/schwab-positions-2026-08-31.csv');
+  });
+});

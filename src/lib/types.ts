@@ -1,5 +1,7 @@
 import type { Page, BrowserContext, Download } from 'playwright';
 
+export type SaveStatus = 'saved' | 'reused';
+
 /** A site is one authenticated *identity* (not one domain). Lives at sites/<id>/site.json. */
 export interface SiteConfig {
   /** dir name under sites/, e.g. "cloudflare-stg" — the selector + auth key */
@@ -68,6 +70,8 @@ export interface DownloadedFile {
   invoiceId?: string;
   bytes: number;
   skipped: boolean;
+  /** whether this manifest entry came from a fresh write or a name-collision reuse */
+  status: SaveStatus;
 }
 
 /** Options for save()/saveUrl(). A bare string is backward-compat shorthand for { invoiceId }. */
@@ -79,6 +83,8 @@ export interface SaveOptions {
   /** file under THIS YYYY-MM's folder instead of the run's --month (a backfill spanning many months
    * files each statement into its own raw/{year}/{month}/ from one run). Ignored if not YYYY-MM. */
   ym?: string;
+  /** stamp the filename with YYYY-MM-DD before it reaches the sink, avoiding same-name snapshot collisions */
+  dateStamp?: string;
 }
 
 export interface ReachTarget {

@@ -107,12 +107,13 @@ worked example: a bare `page.goto()` to a tokenless or stale-token app URL is tr
   no `--month` stamps the file with the param default, which can be the WRONG month folder
   (a today pull landed as `2026-07`). Downstream pickers that key on the month string then
   ignore the fresh file -- pass `--month <YYYY-MM>` or move the file to the correct folder.
-- **A re-pull with a filename that already exists returns `"skipped": true` and writes NOTHING**
-  (the local sink dedups by filename). So `bro run schwab positions --month 2026-08` a second time
-  in the same month fetches fresh data then silently discards it, leaving the stale CSV in place --
-  and the dashboard rebuild then reports success on old shares. Confirmed 2026-08-27: a fresh pull
-  said `skipped:true` and the CSV stayed 2 days old. Fix: **`rm` the existing month CSV first**,
-  then re-pull (it writes), then rebuild. Always check the CSV's `as of ...` header line after a pull.
+- **Snapshot re-pulls need a collision-free name.** The local sink and Drive raw sink both dedup by
+  filename, and finlib's `drive_cli.py upload` is non-clobbering, so a second same-month pull can
+  silently reuse the earlier file. For snapshot workflows such as Schwab `positions`/`orders`, run
+  with **`--date-stamp`** (or `--date-stamp=YYYY-MM-DD`) so `schwab-positions-2026-08.csv` becomes
+  `schwab-positions-2026-08-31.csv` and the fresh pull persists. A reused file now reports
+  `status:"reused"` instead of looking like a fresh save. Always check the CSV's `as of ...` header
+  line after a pull.
 - **Cost-basis tax LOTS (`sites/schwab/workflows/lots.ts`, read-only): the lot table is behind a
   per-symbol drill-down on the Positions grid, not a URL.** Mechanics that work: wait for the symbol
   to render (the grid is slow; symbols are `<th>` row-headers, not `<td>`); each holding is a
