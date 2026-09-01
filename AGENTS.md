@@ -38,6 +38,10 @@ context gets bot-blocked. For a site with `browser: 'persistent'` + `interactive
 3. If the session expired, `bro run` prompts the human to log in again in the live window
    (`auth-expired`, needsHuman).
 
+4. When attached to a live session over CDP, teardown must only drop the CDP client connection:
+   let the process exit / detach, and never call `browser.close()` or `context.close()` on that
+   session. `src/lib/session.ts:46` is the canonical safe pattern to preserve.
+
 Do NOT `bro auth` persistent/interactive sites — auth happens at `session start` / run time in the
 real profile.
 
