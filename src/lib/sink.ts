@@ -4,11 +4,13 @@ import { execFileSync } from 'node:child_process';
 import type { BroConfig } from './config.ts';
 import { BroError } from './errors.ts';
 import { accountingRelPath } from './paths.ts';
+import type { SaveStatus } from './types.ts';
 
 export interface PutResult {
   dest: string;
   bytes: number;
   skipped: boolean;
+  status: SaveStatus;
 }
 
 /** A destination for produced files, scoped to one (source, year, month). */
@@ -33,10 +35,10 @@ class LocalSink implements Sink {
     fs.mkdirSync(this.destDir, { recursive: true });
     const dest = path.join(this.destDir, name);
     if (fs.existsSync(dest)) {
-      return { dest, bytes: fs.statSync(dest).size, skipped: true };
+      return { dest, bytes: fs.statSync(dest).size, skipped: true, status: 'reused' };
     }
     fs.copyFileSync(tempPath, dest);
-    return { dest, bytes: fs.statSync(dest).size, skipped: false };
+    return { dest, bytes: fs.statSync(dest).size, skipped: false, status: 'saved' };
   }
 }
 
@@ -145,12 +147,12 @@ class DriveRawSink implements Sink {
     // dedup: skip if a file with this name already exists in the target folder
     const existing = driveList(parent).find((e) => e.name === name);
     if (existing) {
-      return { dest: `drive:${existing.id}`, bytes, skipped: true };
+      return { dest: `drive:${existing.id}`, bytes, skipped: true, status: 'reused' };
     }
     const res = finlibDrive('upload', ['--parent', parent, '--name', name, '--input', tempPath, '--mime', mimeFromName(name)]);
     const id = (res['id'] ?? '') as string;
     if (!id) throw new BroError('sink-unavailable', `drive upload "${name}" returned no id`, { detail: { parent } });
-    return { dest: `drive:${id}`, bytes, skipped: res['skipped'] === true };
+    return { dest: `drive:${id}`, bytes, skipped: res['skipped'] === true, status: res['skipped'] === true ? 'reused' : 'saved' };
   }
 }
 

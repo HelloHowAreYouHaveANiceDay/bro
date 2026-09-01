@@ -22,6 +22,17 @@ function normalizeSaveOpts(opts?: string | SaveOptions): SaveOptions {
   return typeof opts === 'string' ? { invoiceId: opts } : (opts ?? {});
 }
 
+function stampNameForDate(name: string, dateStamp?: string): string {
+  if (!dateStamp || !/^\d{4}-\d{2}-\d{2}$/.test(dateStamp)) return name;
+  const extMatch = /\.([A-Za-z0-9]{2,5})$/.exec(name);
+  const ext = extMatch ? extMatch[0] : '';
+  const base = ext ? name.slice(0, -ext.length) : name;
+  const ym = dateStamp.slice(0, 7);
+  if (base.endsWith(`-${dateStamp}`)) return name;
+  if (base.endsWith(`-${ym}`)) return `${base.slice(0, -ym.length)}${dateStamp}${ext}`;
+  return `${base}-${dateStamp}${ext}`;
+}
+
 function reachLocators(page: Page, target: ReachTarget): Locator[] {
   if (target.role) {
     return [target.text === undefined ? page.getByRole(target.role as ReachRole) : page.getByRole(target.role as ReachRole, { name: target.text })];
@@ -64,15 +75,16 @@ export function buildContext(args: {
   defaultSource: string;
   defaultYear: string;
   defaultMonth: string;
+  defaultDateStamp?: string;
   log: RunLog;
   tmpDir: string;
   browserChannel: string;
 }): WorkflowContext {
-  const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, log, tmpDir, browserChannel } = args;
+  const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, defaultDateStamp, log, tmpDir, browserChannel } = args;
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  function ensureName(name: string): string {
-    const clean = sanitizeFilename(name);
+  function ensureName(name: string, dateStamp?: string): string {
+    const clean = sanitizeFilename(stampNameForDate(name, dateStamp));
     return /\.[A-Za-z0-9]{2,5}$/.test(clean) ? clean : `${clean}.pdf`;
   }
 
@@ -87,11 +99,11 @@ export function buildContext(args: {
     const sink = sinkFor(src, year, month);
     if (!sink) {
       log.line('staged', { name, bytes, invoiceId, source: src, ym: `${year}-${month}`, dryRun: true });
-      return { name, dest: '(dry-run)', bytes, skipped: false, ...(invoiceId ? { invoiceId } : {}) };
+      return { name, dest: '(dry-run)', bytes, skipped: false, status: 'saved', ...(invoiceId ? { invoiceId } : {}) };
     }
     const res = await sink.put(tempPath, name);
-    log.line(res.skipped ? 'skipped' : 'saved', { name, dest: res.dest, bytes: res.bytes, invoiceId, source: src, ym: `${year}-${month}` });
-    return { name, dest: res.dest, bytes: res.bytes, skipped: res.skipped, ...(invoiceId ? { invoiceId } : {}) };
+    log.line(res.status, { name, dest: res.dest, bytes: res.bytes, invoiceId, source: src, ym: `${year}-${month}` });
+    return { name, dest: res.dest, bytes: res.bytes, skipped: res.skipped, status: res.status, ...(invoiceId ? { invoiceId } : {}) };
   }
 
   return {
@@ -115,14 +127,16 @@ export function buildContext(args: {
     },
 
     async save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
-      const finalName = ensureName(name);
+      const saveOpts = normalizeSaveOpts(opts);
+      const finalName = ensureName(name, saveOpts.dateStamp ?? defaultDateStamp);
       const tempPath = path.join(tmpDir, finalName);
       await download.saveAs(tempPath);
-      return ship(tempPath, finalName, normalizeSaveOpts(opts));
+      return ship(tempPath, finalName, saveOpts);
     },
 
     async saveUrl(url: string, name: string, opts?: string | SaveOptions): Promise<DownloadedFile> {
-      const finalName = ensureName(name);
+      const saveOpts = normalizeSaveOpts(opts);
+      const finalName = ensureName(name, saveOpts.dateStamp ?? defaultDateStamp);
       // Fetch THROUGH THE LIVE PAGE (real browser network stack: cookies, Referer, Sec-Fetch-*,
       // genuine TLS/JA3), not context.request.get() -- confirmed (2026-07-28, Inspira HSA) that
       // some WAF-guarded portals 403 the Node-side APIRequestContext even with matching cookies
@@ -143,11 +157,12 @@ export function buildContext(args: {
       });
       const tempPath = path.join(tmpDir, finalName);
       fs.writeFileSync(tempPath, Buffer.from(base64, 'base64'));
-      return ship(tempPath, finalName, normalizeSaveOpts(opts));
+      return ship(tempPath, finalName, saveOpts);
     },
 
     async printPage(replay, name, opts) {
-      const finalName = ensureName(name);
+      const saveOpts = normalizeSaveOpts(opts);
+      const finalName = ensureName(name, saveOpts.dateStamp ?? defaultDateStamp);
       const tempPath = path.join(tmpDir, finalName);
       // Playwright's page.pdf() only works in headless mode -- real/persistent (headed)
       // browsers reject it (Page.printToPDF is unavailable), and many statement portals
@@ -168,7 +183,7 @@ export function buildContext(args: {
       } finally {
         await clone.close();
       }
-      return ship(tempPath, finalName, normalizeSaveOpts(opts));
+      return ship(tempPath, finalName, saveOpts);
     },
   };
 }

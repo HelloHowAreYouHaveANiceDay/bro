@@ -18,6 +18,7 @@ interface Args {
   json: boolean;
   headed: boolean;
   month?: string;
+  dateStamp?: string;
   kind?: string;
   params: Record<string, string>;
 }
@@ -37,6 +38,7 @@ function parseArgs(argv: string[]): Args {
     if (key === 'json') out.json = true;
     else if (key === 'headed') out.headed = true;
     else if (key === 'month') out.month = inlineVal ?? argv[++i];
+    else if (key === 'date-stamp') out.dateStamp = inlineVal ?? 'today';
     else if (key === 'kind') out.kind = inlineVal ?? argv[++i];
     else out.params[key] = inlineVal ?? argv[++i] ?? '';
   }
@@ -47,6 +49,13 @@ function emit(args: Args, ok: boolean, payload: Record<string, unknown>): void {
   if (args.json) {
     process.stdout.write(JSON.stringify(ok ? { ok, result: payload } : { ok, error: payload }, null, 2) + '\n');
   }
+}
+
+function localDateStamp(now: Date): string {
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 async function main(): Promise<number> {
@@ -89,12 +98,13 @@ async function main(): Promise<number> {
 
     case 'test':
     case 'run': {
-      if (!a || !b) throw new BroError('bad-args', `usage: bro ${verb} <site> <workflow> [--month YYYY-MM]`);
+      if (!a || !b) throw new BroError('bad-args', `usage: bro ${verb} <site> <workflow> [--month YYYY-MM] [--date-stamp[=YYYY-MM-DD]]`);
       const manifest = await runWorkflow({
         siteId: a,
         workflowName: b,
         cliParams: args.params,
         month: args.month,
+        dateStamp: args.dateStamp === 'today' ? localDateStamp(now) : args.dateStamp,
         headed: args.headed,
         dryRun: verb === 'test',
         stampIso,
@@ -104,7 +114,7 @@ async function main(): Promise<number> {
       if (!args.json) {
         process.stderr.write(`\n${verb} ${a}/${b} (${manifest.month}) -> ${manifest.location}\n`);
         for (const f of manifest.files) {
-          process.stderr.write(`  ${f.skipped ? 'skip' : 'save'}  ${f.name} (${f.bytes} bytes)\n`);
+          process.stderr.write(`  ${f.status}  ${f.name} (${f.bytes} bytes)\n`);
         }
         process.stderr.write(`  ${manifest.count} file(s)\n`);
       }
@@ -293,8 +303,8 @@ function capabilityDoc(): Record<string, unknown> {
       { name: 'sessions', args: '', interactive: false },
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },
       { name: 'new', args: '<site> <workflow> --kind <kind>', interactive: false },
-      { name: 'test', args: '<site> <workflow> [--month]', interactive: false, dryRun: true },
-      { name: 'run', args: '<site> <workflow> [--month] [--headed]', interactive: false },
+      { name: 'test', args: '<site> <workflow> [--month] [--date-stamp[=YYYY-MM-DD]]', interactive: false, dryRun: true },
+      { name: 'run', args: '<site> <workflow> [--month] [--date-stamp[=YYYY-MM-DD]] [--headed]', interactive: false },
       { name: 'run-all', args: '--kind <kind> [--month]', interactive: false },
       { name: 'list', args: '', interactive: false },
       { name: 'describe', args: '', interactive: false },
