@@ -1,0 +1,58 @@
+name: release
+
+# Tag-triggered release. Builds the bim-bro.exe driver SEA on Windows (the SEA
+# bakes the host node.exe, so it cannot be cross-compiled), zips it as the asset
+# name bim-cli's release workflow fetches, and publishes it to the GitHub release.
+#
+# bim-cli's driver-pins.json pins "bim-bro" to a tag here; its release CI then
+# downloads bim-bro-windows-amd64.zip from this release and bundles bim-bro.exe
+# into bim-cli-windows-amd64.zip, so `bim bro` ships to every bim-cli install.
+#
+# The tag MUST equal src/driver.ts VERSION -- the pinned-driver conformance
+# check `describe:version-matches-pin` compares the driver's self-reported
+# version against the pin tag. The verify step below enforces this against the
+# real built artifact, not the source, so a stale build cannot slip through.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # No authed browser flow runs in CI; skip the ~130MB Chromium download.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: build driver (bim-bro.exe SEA)
+        run: npm run build:driver
+
+      - name: verify tag matches built driver version
+        shell: pwsh
+        run: |
+          $tag = "$env:GITHUB_REF_NAME" -replace '^v',''
+          $resp = '{"jsonrpc":"2.0","method":"version","params":{},"id":1}' | & .\bim-bro.exe
+          $ver = ($resp | ConvertFrom-Json).result.version
+          if ($ver -ne $tag) {
+            throw "tag v$tag does not match bim-bro.exe self-reported version '$ver' -- bump src/driver.ts VERSION or the tag so they agree (driver-pins.json version-matches-pin check)"
+          }
+          Write-Host "version match: driver reports $ver, tag is v$tag"
+
+      - name: package
+        shell: pwsh
+        run: Compress-Archive -Path bim-bro.exe -DestinationPath bim-bro-windows-amd64.zip -Force
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: bim-bro-windows-amd64.zip
