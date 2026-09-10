@@ -19,7 +19,17 @@ bro has two front doors over the same workflow engine:
 - Error `kind` → JSON-RPC code per the bim-cli table; `auth-expired` is normalized to
   `auth_required` so the dispatcher's oauth intercept fires.
 
-## Build + install
+## Release (how `bim bro` ships to bim-cli installs)
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`: it builds `bim-bro.exe` on a
+Windows runner, verifies the tag equals the driver's self-reported version, and publishes
+`bim-bro-windows-amd64.zip` (containing `bim-bro.exe`) to the GitHub release. bim-cli pins
+`bim-bro` -> this repo @ that tag in `driver-pins.json`; its release CI fetches that asset
+and bundles `bim-bro.exe` into `bim-cli-windows-amd64.zip`, so `bim bro` is available on
+every bim-cli install. **The tag must equal `src/driver.ts` `VERSION`** (currently `0.1.0`)
+so the pinned-driver `describe:version-matches-pin` conformance check passes.
+
+## Build + install (local dev)
 
 ```
 npm run build:driver          # -> bim-bro.exe (Node 22+ SEA; ~92 MB)
