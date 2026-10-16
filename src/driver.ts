@@ -19,7 +19,7 @@ import { BroError } from './lib/errors.ts';
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -38,7 +38,7 @@ const codeFor = (kind: string): number => KIND_CODE[kind] ?? -32099;
 // bro kinds -> the bim-cli kind the dispatcher expects (auth intercept keys on `auth_required`).
 const NORMALIZE_KIND: Record<string, string> = { 'auth-expired': 'auth_required' };
 
-function describeDoc(): Record<string, unknown> {
+export function describeDoc(): Record<string, unknown> {
   return {
     name: 'bro',
     version: VERSION,
@@ -63,6 +63,8 @@ function describeDoc(): Record<string, unknown> {
           { name: 'dateStamp', type: 'string', help: 'stamp saved filenames with YYYY-MM-DD to avoid snapshot collisions' },
           { name: 'headed', type: 'bool', help: 'run headed (visible browser)' },
         ],
+        // Any other --key value is the workflow's own param (e.g. `--url` for espn api).
+        extra_args: true,
         output: 'json',
       },
       {
@@ -74,6 +76,7 @@ function describeDoc(): Record<string, unknown> {
           { name: 'month', type: 'string' },
           { name: 'dateStamp', type: 'string' },
         ],
+        extra_args: true,
         output: 'json',
         supports_dry_run: true,
       },
@@ -106,6 +109,16 @@ function describeDoc(): Record<string, unknown> {
       },
     ],
   };
+}
+
+/** Workflow params are strings (as on the bro CLI); bim forwards a bare --flag as true. */
+export function workflowParams(params: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    out[k] = typeof v === 'string' ? v : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  }
+  return out;
 }
 
 export async function doctor(): Promise<Record<string, unknown>> {
@@ -227,7 +240,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       const manifest = await runWorkflow({
         siteId: site,
         workflowName: workflow,
-        cliParams: params as Record<string, string>,
+        cliParams: workflowParams(params),
         month: params.month ? String(params.month) : undefined,
         dateStamp:
           requestedDateStamp === true
