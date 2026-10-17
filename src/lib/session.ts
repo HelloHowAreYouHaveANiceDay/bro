@@ -165,6 +165,39 @@ export async function startPersistentSession(
   return { context, port };
 }
 
+/**
+ * True for the Playwright error raised when two CDP clients race to answer the same JavaScript dialog: the host's
+ * auto-dismiss loses to another attached client (e.g. a workflow that accepted a beforeunload "Leave site?" prompt)
+ * and Playwright throws `Page.handleJavaScriptDialog: No dialog is showing` from an event handler, with no caller to
+ * catch it. Uncaught, it killed the session host -- and with it the persistent browser every attached client was
+ * using (ESPN draft room reload, 2026-10-16). The dialog is already handled, so it is safe to ignore.
+ */
+export function isBenignDialogRace(err: unknown): boolean {
+  const e = err as { method?: string; message?: string } | null;
+  if (!e) return false;
+  return (
+    (e.method === 'Page.handleJavaScriptDialog' || /Page\.handleJavaScriptDialog/.test(e.message ?? '')) &&
+    /No dialog is showing/i.test(e.message ?? '')
+  );
+}
+
+/** Keep the session host alive through benign dialog races; anything else still crashes as before. */
+export function guardSessionHost(
+  proc: Pick<NodeJS.Process, 'on'>,
+  writeStderr: (msg: string) => void,
+  rethrow: (err: unknown) => void,
+): void {
+  const handle = (err: unknown) => {
+    if (isBenignDialogRace(err)) {
+      writeStderr('[bro] ignored a dialog already answered by another client (No dialog is showing).\n');
+      return;
+    }
+    rethrow(err);
+  };
+  proc.on('uncaughtException', handle);
+  proc.on('unhandledRejection', handle);
+}
+
 export interface RunLiveSessionOptions {
   site: Pick<SiteConfig, 'id' | 'name'>;
   port: number;

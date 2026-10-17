@@ -206,3 +206,23 @@ describe('runLiveSession', () => {
     expect(keepAlive).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('guardSessionHost (dialog race must not kill the session host)', () => {
+  it('swallows the "No dialog is showing" race and rethrows everything else', async () => {
+    const { guardSessionHost, isBenignDialogRace } = await import('./session.ts');
+    const handlers: Record<string, (e: unknown) => void> = {};
+    const rethrown: unknown[] = [];
+    const logs: string[] = [];
+    guardSessionHost({ on: ((ev: string, h: (e: unknown) => void) => { handlers[ev] = h; }) as never }, (m) => logs.push(m), (e) => rethrown.push(e));
+    const race = Object.assign(new Error('Protocol error (Page.handleJavaScriptDialog): No dialog is showing'), { method: 'Page.handleJavaScriptDialog' });
+    expect(isBenignDialogRace(race)).toBe(true);
+    handlers.uncaughtException!(race);
+    handlers.unhandledRejection!(race);
+    expect(rethrown).toEqual([]);
+    expect(logs.length).toBe(2);
+    const other = new Error('boom');
+    handlers.uncaughtException!(other);
+    expect(rethrown).toEqual([other]);
+    expect(isBenignDialogRace(new Error('Target closed'))).toBe(false);
+  });
+});
