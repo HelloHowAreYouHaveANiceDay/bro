@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: ${{ fromJSON(vars.WINDOWS_RUNS_ON || '["self-hosted","Windows","X64"]') }}
     env:
       # No authed browser flow runs in CI; skip the ~130MB Chromium download.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -39,7 +39,7 @@ jobs:
         run: npm run build:driver
 
       - name: verify tag matches built driver version
-        shell: pwsh
+        shell: powershell
         run: |
           $tag = "$env:GITHUB_REF_NAME" -replace '^v',''
           $resp = '{"jsonrpc":"2.0","method":"version","params":{},"id":1}' | & .\bim-bro.exe
@@ -50,7 +50,7 @@ jobs:
           Write-Host "version match: driver reports $ver, tag is v$tag"
 
       - name: package
-        shell: pwsh
+        shell: powershell
         run: |
           Compress-Archive -Path bim-bro.exe -DestinationPath bim-bro-windows-amd64.zip -Force
           # bim-cli's pin-driver.ps1 refuses a release without the .sha256 asset.
