@@ -8,7 +8,7 @@ import { recordFlow } from './lib/codegen.ts';
 import { authCapture } from './lib/auth.ts';
 import { scaffoldWorkflow } from './lib/scaffold.ts';
 import { runWorkflow } from './lib/runner.ts';
-import { startPersistentSession, runLiveSession } from './lib/session.ts';
+import { startPersistentSession, runLiveSession, guardSessionHost } from './lib/session.ts';
 import { awaitInteractiveLogin, DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS } from './lib/authGuard.ts';
 import { readSessions, setSession, removeSession, getSession, probeCDP } from './lib/sessions.ts';
 import { chromium } from 'playwright';
@@ -204,6 +204,10 @@ async function main(): Promise<number> {
       if (sub === 'start') {
         if (!siteId) throw new BroError('bad-args', 'usage: bro session start <site>');
         const site = loadSite(siteId);
+        guardSessionHost(process, (m) => process.stderr.write(m), (err) => {
+          process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+          process.exit(1);
+        });
         const { context, port } = await startPersistentSession(site, { channel: cfg.browserChannel });
         const page = context.pages()[0] ?? (await context.newPage());
         await runLiveSession({
