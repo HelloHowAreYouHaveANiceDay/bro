@@ -8,14 +8,12 @@ import { recordFlow } from './lib/codegen.ts';
 import { authCapture } from './lib/auth.ts';
 import { scaffoldWorkflow } from './lib/scaffold.ts';
 import { runWorkflow } from './lib/runner.ts';
-import { startPersistentSession, runLiveSession, guardSessionHost, pickLoginPage } from './lib/session.ts';
 import { awaitInteractiveLogin, DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS } from './lib/authGuard.ts';
 import { readSessions, setSession, removeSession, getSession, probeCDP } from './lib/sessions.ts';
 import { startDetached, liveSession } from './lib/detach.ts';
-import {
-  resolveLive, listTabs, pickTab, PageCDP, clickSelector, typeText, pressKey, gotoUrl, screenshot,
-  captureResponses, openTab, closeTab, pidAlive,
-} from './lib/page.ts';
+import { hostSession } from './lib/sessionHost.ts';
+import { pidAlive } from './lib/page.ts';
+import { openUrl, pageAction } from './lib/pageActions.ts';
 import { chromium } from 'playwright';
 
 interface Args {
@@ -231,51 +229,14 @@ async function main(): Promise<number> {
           emit(args, true, { site: siteId, port: existing.port, pid: existing.pid, status: 'already-running' });
           return 0;
         }
-        guardSessionHost(process, (m) => process.stderr.write(m), (err) => {
-          process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
-          process.exit(1);
-        });
-        const { context, port } = await startPersistentSession(site, { channel: cfg.browserChannel });
-        // Reuse a restored tab already on the site instead of opening a duplicate of it.
-        const page = pickLoginPage(context.pages(), site) ?? (await context.newPage());
-        await runLiveSession({
-          site,
-          port,
-          pid: process.pid,
-          startedAt: new Date().toISOString(),
-          detectionTimeoutMs: DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS,
-          setSession,
-          removeSession,
-          emitLive: () => {
-            if (!args.json)
-              process.stderr.write(
-                `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
-                  `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
-                  `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
-              );
-            emit(args, true, { site: siteId, port, status: 'live' });
-          },
-          detectLogin: () =>
-            site.public
-              ? Promise.resolve(true) // no login to detect; don't navigate the human's tabs
-              : awaitInteractiveLogin(page, site, () => {}, {
-                  timeoutMs: DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS,
-                  fatal: false,
-                }),
-          keepAlive: () => new Promise<void>(() => {}),
-          closeContext: () => context.close(),
-          onSignal: (signal, handler) => {
-            process.on(signal, handler);
-          },
-          onContextClose: (handler) => {
-            context.on('close', handler);
-          },
-          writeStderr: (msg) => {
-            process.stderr.write(msg);
-          },
-          exit: (code) => {
-            process.exit(code);
-          },
+        await hostSession(site, cfg.browserChannel, (port) => {
+          if (!args.json)
+            process.stderr.write(
+              `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
+                `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
+                `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
+            );
+          emit(args, true, { site: siteId, port, status: 'live' });
         });
         return 0;
       }
@@ -287,139 +248,59 @@ async function main(): Promise<number> {
           emit(args, true, { site: siteId, status: 'not-running' });
           return 0;
         }
-        if (await probeCDP(live.port)) {
+        // Only close the browser on that port if THIS site's host is still running: a stale row's port
+        // may now belong to another site's session, which must not be closed.
+        // A row is ours only while its host pid runs AND its port answers; otherwise it is stale (the
+        // port may be another site's browser, the pid may be reused) and we just drop the row.
+        const ours = pidAlive(live.pid) && !!(await probeCDP(live.port));
+        if (ours) {
           try {
             const b = await chromium.connectOverCDP(`http://127.0.0.1:${live.port}`);
             await b.close();
           } catch {
             /* fall through to pid kill */
           }
-        }
-        try {
-          process.kill(live.pid);
-        } catch {
-          /* already gone */
+          try {
+            process.kill(live.pid);
+          } catch {
+            /* already gone */
+          }
         }
         removeSession(siteId);
         if (!args.json) process.stderr.write(`stopped session for ${siteId}\n`);
-        emit(args, true, { site: siteId, status: 'stopped' });
+        emit(args, true, { site: siteId, status: ours ? 'stopped' : 'stale-removed' });
         return 0;
       }
       throw new BroError('bad-args', 'usage: bro session start|stop <site>');
     }
 
     case 'open': {
-      // bro open <url> [--site <id>] -- a tab in a LIVE session (default: the built-in `scratch` site,
-      // started detached on demand). Public browsing belongs in scratch, not a vendor's logged-in profile.
-      const url = a;
-      if (!url) throw new BroError('bad-args', 'usage: bro open <url> [--site <id>]');
-      const siteId = args.params['site'] || 'scratch';
-      loadSite(siteId);
-      let live = await liveSession(siteId);
-      let started = false;
-      if (!live) {
-        if (siteId !== 'scratch')
-          throw new BroError('no-session', `no LIVE session for "${siteId}"`, { retriable: true, hint: `bro session start ${siteId} --detach` });
-        await startDetached(siteId);
-        live = await liveSession(siteId);
-        started = true;
-        if (!live) throw new BroError('internal', 'scratch session did not come up');
-      }
-      const tab = await openTab(live.port, url);
-      const payload = { site: siteId, port: live.port, tab: tab.id, url, startedSession: started };
-      if (!args.json) process.stderr.write(`[bro] opened ${url} in ${siteId} (tab ${tab.id}). Next: bro page ${siteId} text --tab ${tab.id}\n`);
-      emit(args, true, payload);
+      // bro open <url> [--site <id>] -- default site: the built-in scratch browser (started detached on demand).
+      const r = await openUrl(a ?? '', args.params['site'] || 'scratch');
+      if (!args.json) process.stderr.write(`[bro] opened ${r['url']} in ${r['site']} (tab ${r['tab']}). Next: bro page ${r['site']} text --tab ${r['tab']}\n`);
+      emit(args, true, r);
       return 0;
     }
 
     case 'page': {
       // bro page <site> <action> [arg] [--tab <id|url-substr>] -- drive a LIVE session's tab by SITE id.
-      const siteId = a;
-      const action = b;
-      const arg = args._[3];
-      const usage =
-        'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] | click <css> | type <text> | key <Key> | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | close  [--tab <id|url-substr>]';
-      if (!siteId || !action) throw new BroError('bad-args', usage);
-      const site = loadSite(siteId);
-      const live = await resolveLive(siteId);
-      const tabs = await listTabs(live.port);
-      if (action === 'tabs') {
-        const rows = tabs.map((t) => ({ id: t.id, url: t.url, title: t.title }));
-        if (!args.json) for (const t of rows) process.stdout.write(`${t.id}  ${t.url}\n`);
-        emit(args, true, { site: siteId, port: live.port, tabs: rows });
-        return 0;
+      const action = b ?? '';
+      const r = await pageAction(a ?? '', action, args._[3], {
+        tab: args.params['tab'],
+        wait: args.params['wait'] ? Number(args.params['wait']) : undefined,
+        max: args.params['max'] ? Number(args.params['max']) : undefined,
+        reload: args.reload,
+        full: args.full,
+        out: args.params['out'],
+      });
+      emit(args, true, r);
+      if (!args.json) {
+        if (action === 'text') process.stdout.write(String(r['text'] ?? '') + '\n');
+        else if (action === 'eval') process.stdout.write((typeof r['value'] === 'string' ? (r['value'] as string) : JSON.stringify(r['value'])) + '\n');
+        else if (action === 'tabs') for (const t of r['tabs'] as Array<{ id: string; url: string }>) process.stdout.write(`${t.id}  ${t.url}\n`);
+        else process.stdout.write(JSON.stringify(r) + '\n');
       }
-      const tab = pickTab(tabs, args.params['tab'], [site.homeUrl, site.loginUrl]);
-      if (action === 'close') {
-        await closeTab(live.port, tab.id);
-        emit(args, true, { site: siteId, tab: tab.id, status: 'closed' });
-        return 0;
-      }
-      const cdp = await PageCDP.connect(tab);
-      try {
-        const wait = Number(args.params['wait'] || 0);
-        let result: Record<string, unknown>;
-        switch (action) {
-          case 'text': {
-            const max = Number(args.params['max'] || 20000);
-            const text = String((await cdp.evaluate('document.body ? document.body.innerText : ""')) ?? '');
-            result = { url: await cdp.evaluate('location.href'), length: text.length, text: text.slice(0, max) };
-            if (!args.json) process.stdout.write(text.slice(0, max) + '\n');
-            break;
-          }
-          case 'eval': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> eval <js expression>');
-            const value = await cdp.evaluate(arg);
-            result = { value };
-            if (!args.json) process.stdout.write((typeof value === 'string' ? value : JSON.stringify(value)) + '\n');
-            break;
-          }
-          case 'goto': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> goto <url>');
-            result = { url: await gotoUrl(cdp, arg, wait || 15000) };
-            break;
-          }
-          case 'click': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> click <css selector>');
-            await clickSelector(cdp, arg);
-            if (wait) await new Promise((r) => setTimeout(r, wait));
-            result = { clicked: arg, url: await cdp.evaluate('location.href') };
-            break;
-          }
-          case 'type': {
-            if (arg === undefined) throw new BroError('bad-args', 'usage: bro page <site> type <text>  (types into the focused element; click it first)');
-            await typeText(cdp, arg);
-            result = { typed: arg.length };
-            break;
-          }
-          case 'key': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> key <Enter|Tab|Escape|...>');
-            await pressKey(cdp, arg);
-            result = { key: arg };
-            break;
-          }
-          case 'shot': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> shot <out.png> [--full]');
-            result = await screenshot(cdp, arg, args.full);
-            break;
-          }
-          case 'capture': {
-            if (!arg) throw new BroError('bad-args', 'usage: bro page <site> capture <url-substr> [--reload] [--wait ms] [--out file]');
-            const rows = await captureResponses(cdp, arg, { reload: args.reload, waitMs: wait || 15000 });
-            const out = args.params['out'];
-            if (out) fs.writeFileSync(out, JSON.stringify(rows));
-            result = { match: arg, count: rows.length, ...(out ? { out } : { responses: rows }) };
-            break;
-          }
-          default:
-            throw new BroError('bad-args', `unknown page action "${action}"`, { hint: usage });
-        }
-        emit(args, true, { site: siteId, tab: tab.id, ...result });
-        if (!args.json && !['text', 'eval'].includes(action)) process.stdout.write(JSON.stringify(result) + '\n');
-        return 0;
-      } finally {
-        cdp.close();
-      }
+      return 0;
     }
 
     case 'sessions': {

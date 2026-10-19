@@ -31,4 +31,16 @@ mod._resolveFilename = function (request, parent, isMain, options) {
 
 // Importing the driver runs its top-level main() (reads one JSON-RPC request on stdin).
 // Dynamic import (not top-level await — unsupported in the CJS SEA bundle) so the resolver is pinned first.
-void import('./driver.ts');
+// Exception: a DETACHED session host (spawned by `session start --detach`, see lib/detach.ts) is the
+// bro CLI's long-lived `session start <site>`, not a one-shot JSON-RPC call. The env marker is set
+// only by startDetached, so a normal driver invocation can never land here.
+if (process.env.BRO_DETACHED_HOST && process.argv[2] === 'session' && process.argv[3] === 'start' && process.argv[4]) {
+  void import('./lib/sessionHost.ts')
+    .then((m) => m.hostSessionMain(process.argv[4] ?? ''))
+    .catch((err) => {
+      process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+      process.exit(1);
+    });
+} else {
+  void import('./driver.ts');
+}
