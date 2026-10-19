@@ -10,6 +10,10 @@ export type BroErrorKind =
   | 'bot-blocked'
   | 'sink-unavailable'
   | 'bad-args'
+  | 'no-session'
+  | 'cdp-error'
+  | 'page-error'
+  | 'not-found'
   | 'internal';
 
 export class BroError extends Error {

@@ -139,6 +139,19 @@ export async function persistState(site: SiteConfig, context: BrowserContext, st
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
 }
 
+/** The tab a session host uses for login detection: a restored tab already on the site's domain (no duplicate tab), else the first. */
+export function pickLoginPage<P extends { url(): string }>(pages: P[], site: Pick<SiteConfig, 'homeUrl' | 'loginUrl'>): P | undefined {
+  const base = (u: string) => {
+    try {
+      return new URL(u).hostname.split('.').filter(Boolean).slice(-2).join('.');
+    } catch {
+      return '';
+    }
+  };
+  const want = new Set([base(site.homeUrl), base(site.loginUrl)].filter(Boolean));
+  return pages.find((p) => want.has(base(p.url()))) ?? pages[0];
+}
+
 /**
  * Launch a long-lived persistent session with a CDP debug port. The caller (`bro session start`)
  * keeps its process alive holding this open; `openSession` attaches to it over the port. Returns the

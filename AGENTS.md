@@ -26,6 +26,28 @@ readiness predicate (wait until the app settles); a failure raises `not-ready` (
 `auth-expired`. Navigation aborts (`ERR_ABORTED`) during the initial load are silently swallowed
 since redirect-heavy SPAs abort their own pending navigations.
 
+## Page verbs, scratch browser, detached sessions
+
+bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
+
+- `bro session start <site> --detach` runs the session host as its own process and returns once it
+  is LIVE (`{site, port, pid, status: started|already-running, log}`). The browser survives the
+  caller's shell or gateway being killed/restarted. Starting an already-LIVE site is a no-op.
+- `bro open <url> [--site <id>]` opens a tab, by default in the built-in **`scratch`** site (its own
+  empty profile, started detached on demand). Use scratch for public pages (search, tracking, docs);
+  never ride a vendor's logged-in profile for unrelated browsing.
+- `bro page <site> <action>` drives a LIVE session's tab **by site id** (no port numbers):
+  `tabs`, `text [--max N]`, `eval <js>`, `goto <url>`, `click <css>` (real mouse events), `type
+  <text>` (into the focused element), `key <Enter|Tab|...>`, `shot <out.png> [--full]`, `capture
+  <url-substr> [--reload] [--wait ms] [--out file]` (the page's own XHR/fetch response bodies, i.e.
+  API data an in-page fetch replay can't get without the app's auth headers), `close`. Pick the tab
+  with `--tab <id|id-prefix|url-substring>`; without it bro uses the single tab on the site's own
+  domain and refuses (listing candidates) when that is ambiguous.
+- Page verbs talk raw CDP and never close or take over the human's session. Same read-only rule as
+  workflows in financial accounts: navigate and read; never click pay/transfer/cancel controls.
+- `bro sessions` reports `stale (host gone)` when a row's host pid is dead, even if some other
+  browser now answers on that port.
+
 ## Sessions (banks / hardened sites)
 
 Some sites (banks) can't have their session stored for unattended runs, and a fresh automated
