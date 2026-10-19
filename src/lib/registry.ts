@@ -15,20 +15,47 @@ function seaMode(): boolean {
   }
 }
 
-/** dirs under sites/ that have a site.json (the "_example" template is included). */
-export function listSites(): string[] {
+/**
+ * dirs under sites/ that have a site.json (the "_example" template is included). Built-in sites
+ * (`scratch`) are added only with `{ builtins: true }`, so "configured sites" counts stay honest.
+ */
+export function listSites(opts: { builtins?: boolean } = {}): string[] {
   const root = sitesDir();
-  if (!fs.existsSync(root)) return [];
-  return fs
-    .readdirSync(root, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && fs.existsSync(path.join(root, d.name, 'site.json')))
-    .map((d) => d.name)
-    .sort();
+  const found = fs.existsSync(root)
+    ? fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && fs.existsSync(path.join(root, d.name, 'site.json')))
+        .map((d) => d.name)
+    : [];
+  return [...new Set([...found, ...(opts.builtins ? Object.keys(BUILTIN_SITES) : [])])].sort();
 }
+
+/**
+ * Built-in sites that need no site.json. `scratch` is the general-purpose browser for public pages
+ * (search, tracking pages, docs, research): its own empty persistent profile, never a vendor's
+ * logged-in one, so public browsing can't ride on (or leak into) a bank/portal session. A
+ * sites/<id>/site.json with the same id overrides the built-in.
+ */
+export const BUILTIN_SITES: Record<string, Omit<SiteConfig, 'id'>> = {
+  scratch: {
+    name: 'Scratch browser (public pages, no login)',
+    loginUrl: 'about:blank',
+    homeUrl: 'about:blank',
+    source: 'scratch',
+    public: true,
+    headed: true,
+    browser: 'persistent',
+    interactive: false,
+  },
+};
 
 export function loadSite(id: string): SiteConfig {
   const file = path.join(siteDir(id), 'site.json');
-  if (!fs.existsSync(file)) throw noSuchSite(id, listSites());
+  if (!fs.existsSync(file)) {
+    const builtin = BUILTIN_SITES[id];
+    if (builtin) return { ...builtin, id };
+    throw noSuchSite(id, listSites({ builtins: true }));
+  }
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<SiteConfig>;
   for (const k of ['name', 'loginUrl', 'homeUrl', 'source'] as const) {
     if (!raw[k]) throw new BroError('bad-args', `site "${id}" is missing "${k}" in site.json`);
