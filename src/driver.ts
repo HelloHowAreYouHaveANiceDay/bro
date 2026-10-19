@@ -19,7 +19,7 @@ import { BroError } from './lib/errors.ts';
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -52,7 +52,32 @@ export function describeDoc(): Record<string, unknown> {
       { name: 'doctor', description: 'health check (node, playwright, sites)', args: [], output: 'json' },
       { name: 'version', description: 'driver name + version', args: [], output: 'json' },
       { name: 'list', description: 'sites x workflows x auth freshness', args: [], output: 'json' },
-      { name: 'sessions', description: 'live CDP browser sessions', args: [], output: 'json' },
+      { name: 'sessions', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json' },
+      {
+        name: 'open',
+        description: 'open a URL in a tab of a LIVE session (default: built-in scratch browser, started detached on demand)',
+        args: [
+          { name: 'url', type: 'string', required: true, positional: true },
+          { name: 'site', type: 'string', help: 'site id (default scratch)' },
+        ],
+        output: 'json',
+      },
+      {
+        name: 'page',
+        description: 'drive a LIVE session tab by site id: tabs|text|eval|goto|click|type|key|shot|capture|close',
+        args: [
+          { name: 'site', type: 'string', required: true, positional: true },
+          { name: 'action', type: 'string', required: true, positional: true, help: 'tabs|text|eval|goto|click|type|key|shot|capture|close' },
+          { name: 'arg', type: 'string', positional: true, help: 'js / url / css selector / text / key / out.png / url-substr' },
+          { name: 'tab', type: 'string', help: 'tab id, id prefix, or URL substring' },
+          { name: 'wait', type: 'string', help: 'ms to wait (goto/click/capture)' },
+          { name: 'max', type: 'string', help: 'text: max chars (default 20000)' },
+          { name: 'reload', type: 'bool', help: 'capture: reload the page to trigger requests' },
+          { name: 'full', type: 'bool', help: 'shot: full page' },
+          { name: 'out', type: 'string', help: 'capture: write responses to this file' },
+        ],
+        output: 'json',
+      },
       {
         name: 'run',
         description: 'run a site workflow (download/read/write)',
@@ -99,11 +124,12 @@ export function describeDoc(): Record<string, unknown> {
       },
       {
         name: 'session',
-        description: 'start/stop a live browser session (INTERACTIVE -- use the bro CLI)',
+        description: 'start/stop a live browser session (start needs --detach via the driver; attached start is INTERACTIVE -- use the bro CLI)',
         interactive: true,
         args: [
           { name: 'op', type: 'string', required: true, positional: true, help: 'start|stop' },
           { name: 'site', type: 'string', required: true, positional: true },
+          { name: 'detach', type: 'bool', help: 'start: run the session host as its own process; returns once LIVE' },
         ],
         output: 'json',
       },
@@ -222,12 +248,30 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return siteList();
     case 'sessions': {
       const { readSessions, probeCDP } = await import('./lib/sessions.ts');
+      const { pidAlive } = await import('./lib/page.ts');
       const all = readSessions();
       const rows: Array<Record<string, unknown>> = [];
       for (const [id, s] of Object.entries(all)) {
-        rows.push({ site: id, port: s.port, pid: s.pid, startedAt: s.startedAt, alive: !!(await probeCDP(s.port)) });
+        const hostAlive = pidAlive(s.pid);
+        rows.push({ site: id, port: s.port, pid: s.pid, startedAt: s.startedAt, alive: hostAlive && !!(await probeCDP(s.port)), hostAlive });
       }
       return { sessions: rows };
+    }
+    case 'open': {
+      const { openUrl } = await import('./lib/pageActions.ts');
+      return openUrl(String(params.url ?? ''), params.site ? String(params.site) : 'scratch');
+    }
+    case 'page': {
+      const { pageAction } = await import('./lib/pageActions.ts');
+      const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v));
+      return pageAction(String(params.site ?? ''), String(params.action ?? ''), params.arg === undefined ? undefined : String(params.arg), {
+        tab: params.tab ? String(params.tab) : undefined,
+        wait: num(params.wait),
+        max: num(params.max),
+        reload: params.reload === true || params.reload === 'true',
+        full: params.full === true || params.full === 'true',
+        out: params.out ? String(params.out) : undefined,
+      });
     }
     case 'run':
     case 'test': {
@@ -283,8 +327,19 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       }
       return { summary };
     }
-    case 'auth':
     case 'session':
+      if (String(params.op ?? '') === 'start' && (params.detach === true || params.detach === 'true')) {
+        const site = String(params.site ?? '');
+        if (!site) throw new BroError('bad-args', 'session start requires site');
+        loadSite(site);
+        const { startDetached } = await import('./lib/detach.ts');
+        return startDetached(site);
+      }
+      if (String(params.op ?? '') === 'stop') {
+        throw new BroError('bad-args', 'session stop: use the bro CLI (`bro session stop <site>`)', { hint: 'bro session stop <site>' });
+      }
+    // falls through: attached start is interactive
+    case 'auth':
     case 'record':
       throw new BroError('bad-args', `\`${method}\` is interactive -- run it via the bro CLI, not the driver`, {
         needsHuman: true,
