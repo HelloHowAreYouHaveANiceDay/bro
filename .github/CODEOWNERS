@@ -1,0 +1,15 @@
+# GENERATED -- product-repo sensitive-path gate. DO NOT EDIT BY HAND.
+# Policy (libo, 2026-10-29): gate only significant risk -- permissions, data leak,
+# or anything that could damage libo's or pyline's reputation. Goal: safe speed.
+# Requires the human owner's review on deploy / CI / auth / secret / migration
+# paths, enforced by the sensitive-paths-gate ruleset (code-owner review; admin
+# role may bypass on PR merges only). Normal product code is NOT gated.
+
+/.github/            @HelloHowAreYouHaveANiceDay
+wrangler.toml        @HelloHowAreYouHaveANiceDay
+auth/                @HelloHowAreYouHaveANiceDay
+*secret*             @HelloHowAreYouHaveANiceDay
+migrations/          @HelloHowAreYouHaveANiceDay
+/src/lib/auth.ts     @HelloHowAreYouHaveANiceDay
+/src/lib/authGuard.ts @HelloHowAreYouHaveANiceDay
+/.github/CODEOWNERS  @HelloHowAreYouHaveANiceDay
