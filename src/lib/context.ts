@@ -12,6 +12,7 @@ import type { Sink } from './sink.ts';
 import type { RunLog } from './log.ts';
 import { humanPause } from './human.ts';
 import { sanitizeFilename } from './paths.ts';
+import type { DownloadWatcher } from './downloadWatcher.ts';
 
 type ReachRole = Parameters<Page['getByRole']>[0];
 
@@ -79,8 +80,10 @@ export function buildContext(args: {
   log: RunLog;
   tmpDir: string;
   browserChannel: string;
+  /** live sessions: locates a download Playwright lost (browser download behavior reset mid-run) */
+  downloads?: DownloadWatcher;
 }): WorkflowContext {
-  const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, defaultDateStamp, log, tmpDir, browserChannel } = args;
+  const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, defaultDateStamp, log, tmpDir, browserChannel, downloads } = args;
   fs.mkdirSync(tmpDir, { recursive: true });
 
   function ensureName(name: string, dateStamp?: string): string {
@@ -130,7 +133,17 @@ export function buildContext(args: {
       const saveOpts = normalizeSaveOpts(opts);
       const finalName = ensureName(name, saveOpts.dateStamp ?? defaultDateStamp);
       const tempPath = path.join(tmpDir, finalName);
-      await download.saveAs(tempPath);
+      try {
+        await download.saveAs(tempPath);
+      } catch (err) {
+        // Live session + browser download behavior reset by another CDP client: the file went to the
+        // browser's default folder, not Playwright's artifacts dir. Recover it via the watcher.
+        const real = downloads ? await downloads.pathFor(download).catch(() => null) : null;
+        if (!real || !fs.existsSync(real)) throw err;
+        fs.copyFileSync(real, tempPath);
+        fs.rmSync(real, { force: true }); // ours, not the user's: don't leave a copy in Downloads
+        log.line('download-recovered', { name: finalName, from: real, reason: (err as Error).message.split('\n')[0] });
+      }
       return ship(tempPath, finalName, saveOpts);
     },
 

@@ -102,6 +102,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunManifest> {
       log,
       tmpDir,
       browserChannel: cfg.browserChannel,
+      downloads: session.downloads,
     });
     const result = await wf.run(ctx);
 
