@@ -198,4 +198,68 @@ describe('buildContext save', () => {
     expect(file.name).toBe('schwab-positions-2026-08-31.csv');
     expect(file.dest.replace(/\\/g, '/')).toContain('/schwab-positions-2026-08-31.csv');
   });
+
+  it('recovers a download that landed outside the artifacts dir via the watcher, and moves it', async () => {
+    const site: SiteConfig = { id: 'schwab', name: 'Schwab', loginUrl: 'https://e/l', homeUrl: 'https://e/h', source: 'schwab' };
+    const stray = path.join(root, 'Downloads', 'All-Accounts-Positions.csv');
+    fs.mkdirSync(path.dirname(stray), { recursive: true });
+    fs.writeFileSync(stray, 'POSITIONS');
+    let shipped = '';
+    const log = new RunLog('save-recover-test', { mirror: false });
+    const ctx = buildContext({
+      page: {} as Page,
+      context: {} as BrowserContext,
+      site,
+      params: {},
+      sinkFor: () => ({
+        kind: 'local',
+        location: () => root,
+        put: async (tempPath: string, name: string) => {
+          shipped = fs.readFileSync(tempPath, 'utf8');
+          return { dest: path.join(root, name), bytes: 9, skipped: false, status: 'saved' };
+        },
+      }),
+      defaultSource: site.source,
+      defaultYear: '2026',
+      defaultMonth: '10',
+      log,
+      tmpDir: path.join(root, 'tmp'),
+      browserChannel: 'chromium',
+      downloads: { pathFor: async () => stray, close: () => {} },
+    });
+    const file = await ctx.save(
+      {
+        saveAs: async () => {
+          throw new Error("ENOENT: no such file or directory, copyfile 'playwright-artifacts-x/guid'");
+        },
+        url: () => 'blob:x',
+        suggestedFilename: () => 'All-Accounts-Positions.csv',
+      } as unknown as Download,
+      'schwab-positions-2026-10.csv',
+    );
+    expect(file.status).toBe('saved');
+    expect(shipped).toBe('POSITIONS');
+    expect(fs.existsSync(stray)).toBe(false);
+  });
+
+  it('rethrows the saveAs error when no watcher can find the file', async () => {
+    const site: SiteConfig = { id: 's', name: 'S', loginUrl: 'https://e/l', homeUrl: 'https://e/h', source: 's' };
+    const ctx = buildContext({
+      page: {} as Page,
+      context: {} as BrowserContext,
+      site,
+      params: {},
+      sinkFor: () => null,
+      defaultSource: 's',
+      defaultYear: '2026',
+      defaultMonth: '10',
+      log: new RunLog('save-rethrow-test', { mirror: false }),
+      tmpDir: path.join(root, 'tmp'),
+      browserChannel: 'chromium',
+      downloads: { pathFor: async () => null, close: () => {} },
+    });
+    await expect(
+      ctx.save({ saveAs: async () => { throw new Error('ENOENT boom'); }, url: () => 'u', suggestedFilename: () => 'a.csv' } as unknown as Download, 'a.csv'),
+    ).rejects.toThrow('ENOENT boom');
+  });
 });

@@ -10,6 +10,7 @@ import { authExpired } from './errors.ts';
 import { getSession, probeCDP, pickPort } from './sessions.ts';
 import type { LiveSession } from './sessions.ts';
 import { DEFAULT_INTERACTIVE_LOGIN_TIMEOUT_MS } from './authGuard.ts';
+import { openDownloadWatcher, type DownloadWatcher } from './downloadWatcher.ts';
 
 /** A randomized, non-maximized window size (avoids a fixed fingerprint + doesn't hog the screen). */
 function randomWindowSizeArg(): string {
@@ -22,6 +23,8 @@ export interface Session {
   /** absent in persistent mode (launchPersistentContext owns its own browser) */
   browser?: Browser;
   context: BrowserContext;
+  /** live (CDP-attached) sessions only: finds downloads that missed Playwright's artifacts dir */
+  downloads?: DownloadWatcher;
   close(): Promise<void>;
 }
 
@@ -54,13 +57,19 @@ export async function openSession(
   //    Never close the externally-owned browser -- the session stays alive for the next run.
   const live = getSession(site.id);
   if (live && (await probeCDP(live.port))) {
+    // Open the download watcher BEFORE Playwright attaches (see downloadWatcher.ts): another CDP
+    // client detaching resets the browser-wide download behavior, and then only the watcher knows
+    // where the file actually landed. Best effort -- a run without it behaves as before.
+    const downloads = await openDownloadWatcher(live.port).catch(() => undefined);
     const rawBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${live.port}`);
     const context = rawBrowser.contexts()[0] ?? (await rawBrowser.newContext());
     return {
       browser: protectLiveBrowser(rawBrowser),
       context,
+      downloads,
       close: async () => {
         /* keep the live session alive; our CDP connection drops when this process exits */
+        downloads?.close();
       },
     };
   }
