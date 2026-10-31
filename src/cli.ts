@@ -132,7 +132,7 @@ async function main(): Promise<number> {
         }
         process.stderr.write(`  ${manifest.count} file(s)\n`);
       }
-      emit(args, true, manifest as unknown as Record<string, unknown>);
+      emit(args, true, (dryRun ? { ...manifest, dry_run: true } : manifest) as unknown as Record<string, unknown>);
       return 0;
     }
 
@@ -157,7 +157,7 @@ async function main(): Promise<number> {
               cliParams: {},
               month: args.month,
               headed: args.headed,
-              dryRun: false,
+              dryRun,
               stampIso,
               now,
               mirror: !args.json,
@@ -173,7 +173,8 @@ async function main(): Promise<number> {
           }
         }
       }
-      emit(args, !anyFailed, anyFailed ? { kind: 'partial', message: 'one or more sites skipped/failed', summary } : { summary });
+      const result = dryRun ? { summary, dry_run: true } : { summary };
+      emit(args, !anyFailed, anyFailed ? { kind: 'partial', message: 'one or more sites skipped/failed', ...result } : result);
       return anyFailed ? 1 : 0;
     }
 
@@ -349,7 +350,7 @@ function capabilityDoc(): Record<string, unknown> {
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },
       { name: 'new', args: '<site> <workflow> --kind <kind>', interactive: false },
       { name: 'workflow run', args: '<site> <workflow> [--dry-run] [--month] [--date-stamp[=YYYY-MM-DD]] [--headed]', interactive: false },
-      { name: 'workflow run-all', args: '--kind <kind> [--month]', interactive: false },
+      { name: 'workflow run-all', args: '--kind <kind> [--month] [--dry-run]', interactive: false },
       { name: 'site list', args: '', interactive: false },
       { name: 'describe', args: '', interactive: false },
     ],

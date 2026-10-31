@@ -25,6 +25,35 @@ describe('driver verb naming', () => {
     for (const name of verbs) for (const word of name.split(' ')) expect(word).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
 
+  it('publishes the canonical typed arguments and effects', () => {
+    const verbs = describeDoc().verbs as Array<{ name: string; args: Array<{ name: string; type: string }>; effect: string; supports_dry_run?: boolean }>;
+    const byName = Object.fromEntries(verbs.map((verb) => [verb.name, verb]));
+    expect(byName['workflow run']?.args.map((arg) => arg.name)).toEqual(['site', 'workflow', 'month', 'date-stamp', 'headed', 'dry-run']);
+    expect(byName['workflow run-all']?.args.map((arg) => arg.name)).toEqual(['kind', 'month', 'dry-run']);
+    expect(byName['workflow run-all']?.supports_dry_run).toBe(true);
+    expect(byName['page exec']?.args.map((arg) => [arg.name, arg.type])).toEqual([
+      ['site', 'string'], ['action', 'string'], ['arg', 'string'], ['tab', 'string'], ['wait', 'int'], ['max', 'int'],
+      ['reload', 'bool'], ['full', 'bool'], ['out', 'path'],
+    ]);
+    expect(Object.fromEntries(verbs.map((verb) => [verb.name, verb.effect]))).toEqual({
+      doctor: 'read', version: 'read', 'site list': 'read', 'session list': 'read', 'session launch': 'mutate',
+      'session quit': 'mutate', 'page open': 'mutate', 'page exec': 'mutate', 'workflow run': 'mutate',
+      'workflow run-all': 'mutate', 'auth login': 'mutate',
+    });
+  });
+
+  it('supports run-all dry runs with canonical and legacy parameter names', async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'bro-naming-home-'));
+    tempSites = mkdtempSync(join(tmpdir(), 'bro-naming-sites-'));
+    process.env.BRO_HOME = tempHome;
+    process.env.BRO_SITES_DIR = tempSites;
+    await expect(dispatch('workflow.run-all', { kind: 'invoices', 'dry-run': true })).resolves.toEqual({ summary: [], dry_run: true });
+    await expect(dispatch('workflow.run-all', { kind: 'invoices', dry_run: true })).resolves.toEqual({ summary: [], dry_run: true });
+    await expect(dispatch('workflow.run-all', { kind: 'invoices' })).resolves.toEqual({ summary: [] });
+    await expect(dispatch('workflow.run-all', { kind: 'invoices', 'dry-run': false, dryRun: true })).resolves.toEqual({ summary: [] });
+    await expect(dispatch('run-all', { kind: 'invoices', 'dry-run': true })).resolves.toEqual({ summary: [], dry_run: true });
+  });
+
   it('supports aliases, spaced hints, and wires every described method', async () => {
     tempHome = mkdtempSync(join(tmpdir(), 'bro-naming-home-'));
     tempSites = mkdtempSync(join(tmpdir(), 'bro-naming-sites-'));

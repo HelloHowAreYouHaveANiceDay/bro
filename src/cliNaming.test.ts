@@ -35,4 +35,10 @@ describe('CLI verb naming', () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout.split('\n')[0]!).error.kind).toBe('bad-args');
   });
+
+  it('runs workflow run-all in dry-run mode and returns structured JSON', () => {
+    const result = cli(['workflow', 'run-all', '--kind', 'invoices', '--dry-run', '--json']);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: { summary: [], dry_run: true } });
+  });
 });
