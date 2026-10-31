@@ -40,10 +40,12 @@ export function sitesDir(): string {
   // the standalone SEA (which may run from any cwd) finds the same sites later.
   const cwdSites = path.join(process.cwd(), 'sites');
   if (fs.existsSync(cwdSites)) {
-    try {
-      fs.mkdirSync(dataRoot(), { recursive: true });
-      fs.writeFileSync(path.join(dataRoot(), 'sites-dir'), cwdSites, 'utf8');
-    } catch { /* best-effort: ignore write errors (read-only data dir, etc.) */ }
+    if (shouldWriteSitesCache(process.cwd(), cwdSites)) {
+      try {
+        fs.mkdirSync(dataRoot(), { recursive: true });
+        fs.writeFileSync(path.join(dataRoot(), 'sites-dir'), cwdSites, 'utf8');
+      } catch { /* best-effort: ignore write errors (read-only data dir, etc.) */ }
+    }
     return cwdSites;
   }
 
@@ -57,6 +59,26 @@ export function sitesDir(): string {
   // Final fallback: the documented data-root location (absent on most machines unless populated
   // externally, e.g. via symlink or BRO_HOME pointing at the checkout).
   return path.join(dataRoot(), 'sites');
+}
+
+/**
+ * The sites-dir cache is shared by every bro on the machine, so only the user's own checkout may set it:
+ * - never from a linked git worktree (`.git` is a FILE there): worktrees are short-lived (factory/agent branches)
+ *   and hold only the tracked sites/ (site.json files are gitignored), so caching one breaks every later SEA call
+ *   once it is removed (2026-10-31: `bim bro run espn` -> no-such-site);
+ * - never over a cached path that still exists: a second clone must not take over the configured sites.
+ *   A cached path that no longer exists (checkout moved) is replaced. BRO_SITES_DIR remains the explicit override.
+ */
+export function shouldWriteSitesCache(cwd: string, cwdSites: string): boolean {
+  try {
+    if (fs.statSync(path.join(cwd, '.git')).isFile()) return false;
+  } catch { /* no .git: a plain dir with sites/ -- allowed */ }
+  const cachePath = path.join(dataRoot(), 'sites-dir');
+  let cached = '';
+  try { cached = fs.readFileSync(cachePath, 'utf8').trim(); } catch { return true; }
+  if (!cached) return true;
+  if (path.resolve(cached).toLowerCase() === path.resolve(cwdSites).toLowerCase()) return false; // already right
+  return !fs.existsSync(cached);
 }
 
 export function siteDir(id: string): string {

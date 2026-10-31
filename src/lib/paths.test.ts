@@ -136,4 +136,59 @@ describe('sitesDir discovery cache', () => {
       rmSync(checkoutData, { recursive: true, force: true });
     }
   });
+
+  // Incident 2026-10-31: an agent ran bro from a linked worktree, which
+  // overwrote the user's sites-dir cache; the worktree was then removed, so every SEA call (`bim bro run espn
+  // ...`) fell back to <dataRoot>/sites and failed with no-such-site.
+  it('a linked git worktree (.git is a file) uses its own sites/ but never writes the cache', () => {
+    const wt = mkdtempSync(join(tmpdir(), 'bro-test-wt-'));
+    try {
+      mkdirSync(join(wt, 'sites', 'wtsite'), { recursive: true });
+      writeFileSync(join(wt, 'sites', 'wtsite', 'site.json'), JSON.stringify({ name: 'w', loginUrl: 'https://x', homeUrl: 'https://x', source: 'x' }));
+      writeFileSync(join(wt, '.git'), 'gitdir: C:/somewhere/.git/worktrees/x\n');
+      writeFileSync(join(dataDir, 'sites-dir'), sitesRoot, 'utf8');
+      process.env.BRO_HOME = dataDir;
+      process.chdir(wt);
+
+      expect(listSites()).toContain('wtsite'); // the worktree process itself still sees its sites/
+      expect(readFileSync(join(dataDir, 'sites-dir'), 'utf8').trim()).toBe(sitesRoot);
+
+      process.chdir(cwdDir);
+      expect(listSites()).toContain('testsite');
+    } finally {
+      process.chdir(origCwd);
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('a second checkout never replaces a cached sites path that still exists', () => {
+    const other = mkdtempSync(join(tmpdir(), 'bro-test-other-'));
+    try {
+      mkdirSync(join(other, 'sites', '_example'), { recursive: true });
+      writeFileSync(join(dataDir, 'sites-dir'), sitesRoot, 'utf8');
+      process.env.BRO_HOME = dataDir;
+      process.chdir(other);
+      listSites();
+      expect(readFileSync(join(dataDir, 'sites-dir'), 'utf8').trim()).toBe(sitesRoot);
+    } finally {
+      process.chdir(origCwd);
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('a checkout replaces a cached path that no longer exists', () => {
+    const co = mkdtempSync(join(tmpdir(), 'bro-test-co-'));
+    try {
+      mkdirSync(join(co, 'sites', 'cosite'), { recursive: true });
+      writeFileSync(join(dataDir, 'sites-dir'), join(tmpdir(), 'bro-test-gone-xyz', 'sites'), 'utf8');
+      process.env.BRO_HOME = dataDir;
+      process.chdir(co);
+      listSites();
+      expect(readFileSync(join(dataDir, 'sites-dir'), 'utf8').trim().replace(/\\/g, '/'))
+        .toBe(join(co, 'sites').replace(/\\/g, '/'));
+    } finally {
+      process.chdir(origCwd);
+      rmSync(co, { recursive: true, force: true });
+    }
+  });
 });
