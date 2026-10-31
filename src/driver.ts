@@ -16,7 +16,7 @@ import tty from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import { BroError } from './lib/errors.ts';
-import { canonicalMethod } from './lib/verbs.ts';
+import { canonicalMethod, pageOptsFromParams, resolveDateStamp } from './lib/verbs.ts';
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
@@ -50,10 +50,10 @@ export function describeDoc(): Record<string, unknown> {
     env_optional: ['BRO_SINK', 'BRO_LOCAL_ROOT', 'ASSIST_RAW_DRIVE_FOLDER', 'BRO_SITES_DIR', 'BRO_HOME'],
     protocol_version: '2.0',
     verbs: [
-      { name: 'doctor', description: 'health check (node, playwright, sites)', args: [], output: 'json' },
-      { name: 'version', description: 'driver name + version', args: [], output: 'json' },
-      { name: 'site list', description: 'sites x workflows x auth freshness', args: [], output: 'json' },
-      { name: 'session list', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json' },
+      { name: 'doctor', description: 'health check (node, playwright, sites)', args: [], output: 'json', effect: 'read' },
+      { name: 'version', description: 'driver name + version', args: [], output: 'json', effect: 'read' },
+      { name: 'site list', description: 'sites x workflows x auth freshness', args: [], output: 'json', effect: 'read' },
+      { name: 'session list', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json', effect: 'read' },
       {
         name: 'session launch',
         description: 'start a live browser session (start needs --detach via the driver; attached start is INTERACTIVE -- use the bro CLI)',
@@ -63,6 +63,8 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'detach', type: 'bool', help: 'start: run the session host as its own process; returns once LIVE' },
         ],
         output: 'json',
+        effect: 'mutate',
+        notes: 'no dry-run: launching starts a browser process; the reply port and pid exist only after it runs',
       },
       {
         name: 'session quit',
@@ -70,6 +72,8 @@ export function describeDoc(): Record<string, unknown> {
         interactive: true,
         args: [{ name: 'site', type: 'string', required: true, positional: true }],
         output: 'json',
+        effect: 'mutate',
+        notes: 'no dry-run: the driver refuses this verb; stop a session with the bro CLI (bro session quit <site>)',
       },
       {
         name: 'page open',
@@ -79,6 +83,8 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'site', type: 'string', help: 'site id (default scratch)' },
         ],
         output: 'json',
+        effect: 'mutate',
+        notes: 'no dry-run: opening the tab (and starting the scratch browser on demand) is the action; the reply tab id exists only after it runs',
       },
       {
         name: 'page exec',
@@ -88,13 +94,15 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'action', type: 'string', required: true, positional: true, help: 'tabs|text|eval|goto|click|type|key|shot|capture|close' },
           { name: 'arg', type: 'string', positional: true, help: 'js / url / css selector / text / key / out.png / url-substr' },
           { name: 'tab', type: 'string', help: 'tab id, id prefix, or URL substring' },
-          { name: 'wait', type: 'string', help: 'ms to wait (goto/click/capture)' },
-          { name: 'max', type: 'string', help: 'text: max chars (default 20000)' },
+          { name: 'wait', type: 'int', help: 'ms to wait (goto/click/capture)' },
+          { name: 'max', type: 'int', help: 'text: max chars (default 20000)' },
           { name: 'reload', type: 'bool', help: 'capture: reload the page to trigger requests' },
           { name: 'full', type: 'bool', help: 'shot: full page' },
-          { name: 'out', type: 'string', help: 'capture: write responses to this file' },
+          { name: 'out', type: 'path', help: 'capture: write responses to this file' },
         ],
         output: 'json',
+        effect: 'mutate',
+        notes: 'no dry-run: the reply is the live page data (text, eval value, screenshot) and click/type/goto cannot be previewed',
       },
       {
         name: 'workflow run',
@@ -103,7 +111,7 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'site', type: 'string', required: true, positional: true, help: 'site id' },
           { name: 'workflow', type: 'string', required: true, positional: true, help: 'workflow name' },
           { name: 'month', type: 'string', help: 'target month YYYY-MM (default: previous)' },
-          { name: 'dateStamp', type: 'string', help: 'stamp saved filenames with YYYY-MM-DD to avoid snapshot collisions' },
+          { name: 'date-stamp', type: 'string', help: 'stamp saved filenames with YYYY-MM-DD to avoid snapshot collisions' },
           { name: 'headed', type: 'bool', help: 'run headed (visible browser)' },
           { name: 'dry-run', type: 'bool', help: 'stage the workflow and ship nothing (was `test`)' },
         ],
@@ -111,6 +119,7 @@ export function describeDoc(): Record<string, unknown> {
         extra_args: true,
         output: 'json',
         supports_dry_run: true,
+        effect: 'mutate',
       },
       {
         name: 'workflow run-all',
@@ -118,8 +127,11 @@ export function describeDoc(): Record<string, unknown> {
         args: [
           { name: 'kind', type: 'string', required: true, help: 'workflow kind (invoices|statements|...)' },
           { name: 'month', type: 'string' },
+          { name: 'dry-run', type: 'bool' },
         ],
         output: 'json',
+        effect: 'mutate',
+        supports_dry_run: true,
       },
       {
         name: 'auth login',
@@ -128,6 +140,8 @@ export function describeDoc(): Record<string, unknown> {
         human_steps: ['open a browser', 'log in + clear MFA'],
         args: [{ name: 'site', type: 'string', required: true, positional: true }],
         output: 'json',
+        effect: 'mutate',
+        notes: 'no dry-run: interactive human login in a real browser; the driver refuses it (use bro auth login <site>)',
       },
     ],
   };
@@ -225,13 +239,6 @@ function siteList(): Record<string, unknown> {
   return { sites };
 }
 
-function localDateStamp(now: Date): string {
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 export async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
   ({ method, params } = canonicalMethod(method, params));
   switch (method) {
@@ -260,15 +267,7 @@ export async function dispatch(method: string, params: Record<string, unknown>):
     }
     case 'page.exec': {
       const { pageAction } = await import('./lib/pageActions.ts');
-      const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v));
-      return pageAction(String(params.site ?? ''), String(params.action ?? ''), params.arg === undefined ? undefined : String(params.arg), {
-        tab: params.tab ? String(params.tab) : undefined,
-        wait: num(params.wait),
-        max: num(params.max),
-        reload: params.reload === true || params.reload === 'true',
-        full: params.full === true || params.full === 'true',
-        out: params.out ? String(params.out) : undefined,
-      });
+      return pageAction(String(params.site ?? ''), String(params.action ?? ''), params.arg === undefined ? undefined : String(params.arg), pageOptsFromParams(params));
     }
     case 'workflow.run': {
       const site = String(params.site ?? '');
@@ -276,7 +275,6 @@ export async function dispatch(method: string, params: Record<string, unknown>):
       if (!site || !workflow) throw new BroError('bad-args', `${method.replaceAll('.', ' ')} requires site + workflow`);
       const { runWorkflow } = await import('./lib/runner.ts');
       const now = new Date();
-      const requestedDateStamp = params.dateStamp ?? params['date-stamp'];
       const cliParams = workflowParams(params);
       delete cliParams['dry-run'];
       delete cliParams.dry_run;
@@ -286,25 +284,24 @@ export async function dispatch(method: string, params: Record<string, unknown>):
         workflowName: workflow,
         cliParams,
         month: params.month ? String(params.month) : undefined,
-        dateStamp:
-          requestedDateStamp === true
-            ? localDateStamp(now)
-            : typeof requestedDateStamp === 'string'
-              ? requestedDateStamp
-              : undefined,
+        dateStamp: resolveDateStamp(params, now),
         headed: params.headed === true || params.headed === 'true',
         dryRun: [params['dry-run'], params.dry_run, params.dryRun].some((v) => v === true || v === 'true'),
         stampIso: now.toISOString().replace(/[:.]/g, '-'),
         now,
         mirror: false,
       });
-      return manifest;
+      return params['dry-run'] === true || params['dry-run'] === 'true' || params.dry_run === true || params.dry_run === 'true' || params.dryRun === true || params.dryRun === 'true'
+        ? { ...manifest, dry_run: true }
+        : manifest;
     }
     case 'workflow.run-all': {
       const kind = String(params.kind ?? '');
       if (!kind) throw new BroError('bad-args', 'workflow run-all requires kind');
       const { runWorkflow } = await import('./lib/runner.ts');
       const now = new Date();
+      const dryRunFlag = params['dry-run'] ?? params.dry_run ?? params.dryRun;
+      const dryRun = dryRunFlag === true || dryRunFlag === 'true';
       const summary: Array<Record<string, unknown>> = [];
       for (const siteId of listSites()) {
         if (siteId === '_example') continue;
@@ -316,7 +313,7 @@ export async function dispatch(method: string, params: Record<string, unknown>):
             const m = await runWorkflow({
               siteId, workflowName: wfName, cliParams: {},
               month: params.month ? String(params.month) : undefined,
-              headed: false, dryRun: false, stampIso: now.toISOString().replace(/[:.]/g, '-'), now, mirror: false,
+              headed: false, dryRun, stampIso: now.toISOString().replace(/[:.]/g, '-'), now, mirror: false,
             });
             summary.push({ site: siteId, workflow: wfName, status: 'ok', count: m.count });
           } catch (err) {
@@ -325,7 +322,7 @@ export async function dispatch(method: string, params: Record<string, unknown>):
           }
         }
       }
-      return { summary };
+      return dryRun ? { summary, dry_run: true } : { summary };
     }
     case 'session.launch':
       if (params.detach === true || params.detach === 'true') {

@@ -1,4 +1,28 @@
 import { BroError } from './errors.ts';
+import type { PageOpts } from './pageActions.ts';
+
+export function resolveDateStamp(params: Record<string, unknown>, now: Date): string | undefined {
+  const requested = Object.prototype.hasOwnProperty.call(params, 'date-stamp') ? params['date-stamp'] : params.dateStamp;
+  if (requested === true) {
+    const year = String(now.getFullYear());
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return typeof requested === 'string' ? requested : undefined;
+}
+
+export function pageOptsFromParams(params: Record<string, unknown>): PageOpts {
+  const num = (value: unknown) => (value === undefined || value === null || value === '' ? undefined : Number(value));
+  return {
+    tab: params.tab ? String(params.tab) : undefined,
+    wait: num(params.wait),
+    max: num(params.max),
+    reload: params.reload === true || params.reload === 'true',
+    full: params.full === true || params.full === 'true',
+    out: params.out ? String(params.out) : undefined,
+  };
+}
 
 export function canonicalMethod(method: string, params: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
   const aliases: Record<string, string> = {
