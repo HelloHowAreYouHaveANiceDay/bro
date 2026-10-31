@@ -7,12 +7,12 @@ describe('driver describe: page verbs', () => {
   const byName = Object.fromEntries(verbs.map((v) => [v.name, v]));
 
   it('exposes open and page so `bim bro open|page` route to the driver', () => {
-    expect(byName['open']!.args.map((a) => a.name)).toEqual(['url', 'site']);
-    expect(byName['page']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out']);
+    expect(byName['page open']!.args.map((a) => a.name)).toEqual(['url', 'site']);
+    expect(byName['page exec']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out']);
   });
 
   it('session takes --detach', () => {
-    expect(byName['session']!.args.map((a) => a.name)).toContain('detach');
+    expect(byName['session launch']!.args.map((a) => a.name)).toContain('detach');
   });
 
   it('reports the bumped version', () => {
