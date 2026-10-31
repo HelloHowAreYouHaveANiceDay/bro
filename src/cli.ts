@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import fs from 'node:fs';
 import { BroError } from './lib/errors.ts';
+import { parseCliVerb } from './lib/verbs.ts';
 import { loadConfig } from './lib/config.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 import { authMetaPath, authPath, profileDir } from './lib/paths.ts';
@@ -23,6 +24,7 @@ interface Args {
   detach: boolean;
   reload: boolean;
   full: boolean;
+  dryRun: boolean;
   month?: string;
   dateStamp?: string;
   kind?: string;
@@ -30,7 +32,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { _: [], json: false, headed: false, detach: false, reload: false, full: false, params: {} };
+  const out: Args = { _: [], json: false, headed: false, detach: false, reload: false, full: false, dryRun: false, params: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (!a.startsWith('--')) {
@@ -46,6 +48,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === 'detach') out.detach = true;
     else if (key === 'reload') out.reload = true;
     else if (key === 'full') out.full = true;
+    else if (key === 'dry-run') out.dryRun = true;
     else if (key === 'month') out.month = inlineVal ?? argv[++i];
     else if (key === 'date-stamp') out.dateStamp = inlineVal ?? 'today';
     else if (key === 'kind') out.kind = inlineVal ?? argv[++i];
@@ -70,14 +73,17 @@ function localDateStamp(now: Date): string {
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
-  const [verb, a, b] = args._;
+  const parsed = parseCliVerb(args._);
+  const verb = parsed.verb;
+  const [a, b, pageArg] = parsed.rest;
+  const dryRun = args.dryRun || parsed.dryRun;
   const stampIso = new Date().toISOString().replace(/[:.]/g, '-');
   const now = new Date();
   const cfg = loadConfig();
 
   switch (verb) {
-    case 'auth': {
-      if (!a) throw new BroError('bad-args', 'usage: bro auth <site>');
+    case 'auth.login': {
+      if (!a) throw new BroError('bad-args', 'usage: bro auth login <site>');
       const site = loadSite(a);
       await authCapture(site, cfg.browserChannel, new Date().toISOString());
       const res = { site: site.id, authFile: authPath(site.id) };
@@ -105,9 +111,8 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    case 'test':
-    case 'run': {
-      if (!a || !b) throw new BroError('bad-args', `usage: bro ${verb} <site> <workflow> [--month YYYY-MM] [--date-stamp[=YYYY-MM-DD]]`);
+    case 'workflow.run': {
+      if (!a || !b) throw new BroError('bad-args', `usage: bro workflow run <site> <workflow> [--dry-run] [--month YYYY-MM] [--date-stamp[=YYYY-MM-DD]]`);
       const manifest = await runWorkflow({
         siteId: a,
         workflowName: b,
@@ -115,7 +120,7 @@ async function main(): Promise<number> {
         month: args.month,
         dateStamp: args.dateStamp === 'today' ? localDateStamp(now) : args.dateStamp,
         headed: args.headed,
-        dryRun: verb === 'test',
+        dryRun,
         stampIso,
         now,
         mirror: !args.json,
@@ -131,8 +136,8 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    case 'run-all': {
-      if (!args.kind) throw new BroError('bad-args', 'usage: bro run-all --kind <kind> [--month YYYY-MM]');
+    case 'workflow.run-all': {
+      if (!args.kind) throw new BroError('bad-args', 'usage: bro workflow run-all --kind <kind> [--month YYYY-MM]');
       const summary: Array<Record<string, unknown>> = [];
       let anyFailed = false;
       for (const siteId of listSites()) {
@@ -172,7 +177,7 @@ async function main(): Promise<number> {
       return anyFailed ? 1 : 0;
     }
 
-    case 'list': {
+    case 'site.list': {
       const sites = listSites({ builtins: true }).map((id) => {
         let mode: string | undefined;
         try {
@@ -207,18 +212,19 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    case 'session': {
-      const sub = a;
-      const siteId = b;
+    case 'session.launch':
+    case 'session.quit': {
+      const sub = verb === 'session.launch' ? 'start' : 'stop';
+      const siteId = a;
       if (sub === 'start') {
-        if (!siteId) throw new BroError('bad-args', 'usage: bro session start <site> [--detach]');
+        if (!siteId) throw new BroError('bad-args', 'usage: bro session launch <site> [--detach]');
         const site = loadSite(siteId);
         if (args.detach) {
           const r = await startDetached(siteId);
           if (!args.json)
             process.stderr.write(
               `[bro] session for ${siteId} is LIVE on CDP port ${r.port} (${r.status}, detached pid ${r.pid}).\n` +
-                `      It survives this shell; end it with \`bro session stop ${siteId}\`. Log: ${r.log}\n`,
+                `      It survives this shell; end it with \`bro session quit ${siteId}\`. Log: ${r.log}\n`,
             );
           emit(args, true, { ...r });
           return 0;
@@ -233,15 +239,15 @@ async function main(): Promise<number> {
           if (!args.json)
             process.stderr.write(
               `\n[bro] session for ${siteId} is LIVE on CDP port ${port}.\n` +
-                `      Run workflows with \`bro run ${siteId} <workflow>\` (they attach, they don't close).\n` +
-                `      Leave this process running; end it with \`bro session stop ${siteId}\` or Ctrl-C.\n`,
+                `      Run workflows with \`bro workflow run ${siteId} <workflow>\` (they attach, they don't close).\n` +
+                `      Leave this process running; end it with \`bro session quit ${siteId}\` or Ctrl-C.\n`,
             );
           emit(args, true, { site: siteId, port, status: 'live' });
         });
         return 0;
       }
       if (sub === 'stop') {
-        if (!siteId) throw new BroError('bad-args', 'usage: bro session stop <site>');
+        if (!siteId) throw new BroError('bad-args', 'usage: bro session quit <site>');
         const live = getSession(siteId);
         if (!live) {
           if (!args.json) process.stderr.write(`no live session for ${siteId}\n`);
@@ -271,21 +277,21 @@ async function main(): Promise<number> {
         emit(args, true, { site: siteId, status: ours ? 'stopped' : 'stale-removed' });
         return 0;
       }
-      throw new BroError('bad-args', 'usage: bro session start|stop <site>');
+      throw new BroError('bad-args', 'usage: bro session launch|quit <site>');
     }
 
-    case 'open': {
-      // bro open <url> [--site <id>] -- default site: the built-in scratch browser (started detached on demand).
+    case 'page.open': {
+      // `bro page open <url> [--site <id>]` defaults to the built-in scratch browser.
       const r = await openUrl(a ?? '', args.params['site'] || 'scratch');
-      if (!args.json) process.stderr.write(`[bro] opened ${r['url']} in ${r['site']} (tab ${r['tab']}). Next: bro page ${r['site']} text --tab ${r['tab']}\n`);
+      if (!args.json) process.stderr.write(`[bro] opened ${r['url']} in ${r['site']} (tab ${r['tab']}). Next: bro page exec ${r['site']} text --tab ${r['tab']}\n`);
       emit(args, true, r);
       return 0;
     }
 
-    case 'page': {
-      // bro page <site> <action> [arg] [--tab <id|url-substr>] -- drive a LIVE session's tab by SITE id.
+    case 'page.exec': {
+      // `bro page exec <site> <action> [arg] [--tab <id|url-substr>]` drives a LIVE session tab.
       const action = b ?? '';
-      const r = await pageAction(a ?? '', action, args._[3], {
+      const r = await pageAction(a ?? '', action, pageArg, {
         tab: args.params['tab'],
         wait: args.params['wait'] ? Number(args.params['wait']) : undefined,
         max: args.params['max'] ? Number(args.params['max']) : undefined,
@@ -303,7 +309,7 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    case 'sessions': {
+    case 'session.list': {
       const all = readSessions();
       const rows: Array<Record<string, unknown>> = [];
       for (const [id, sctx] of Object.entries(all)) {
@@ -320,7 +326,7 @@ async function main(): Promise<number> {
 
     default:
       throw new BroError('bad-args', `unknown verb "${verb ?? ''}"`, {
-        hint: 'verbs: auth session sessions open page record new test run run-all list describe',
+        hint: 'verbs: auth login, session list|launch|quit, page open|exec, workflow run|run-all, site list, record, new, describe',
       });
   }
 }
@@ -330,21 +336,21 @@ function capabilityDoc(): Record<string, unknown> {
     name: 'bro',
     description: 'general browser workflow runner',
     verbs: [
-      { name: 'auth', args: '<site>', interactive: true, needsHuman: true },
-      { name: 'session', args: 'start|stop <site> [--detach]', interactive: true, needsHuman: true },
-      { name: 'sessions', args: '', interactive: false },
-      { name: 'open', args: '<url> [--site <id>]  (default site: built-in scratch, started detached on demand)', interactive: false },
+      { name: 'auth login', args: '<site>', interactive: true, needsHuman: true },
+      { name: 'session list', args: '', interactive: false },
+      { name: 'session launch', args: '<site> [--detach]', interactive: true, needsHuman: true },
+      { name: 'session quit', args: '<site>', interactive: true, needsHuman: true },
+      { name: 'page open', args: '<url> [--site <id>]  (default site: built-in scratch, started detached on demand)', interactive: false },
       {
-        name: 'page',
+        name: 'page exec',
         args: '<site> tabs|text|eval <js>|goto <url>|click <css>|type <text>|key <Key>|shot <png>|capture <url-substr>|close [--tab <id|url-substr>] [--wait ms] [--reload] [--out file] [--full] [--max N]',
         interactive: false,
       },
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },
       { name: 'new', args: '<site> <workflow> --kind <kind>', interactive: false },
-      { name: 'test', args: '<site> <workflow> [--month] [--date-stamp[=YYYY-MM-DD]]', interactive: false, dryRun: true },
-      { name: 'run', args: '<site> <workflow> [--month] [--date-stamp[=YYYY-MM-DD]] [--headed]', interactive: false },
-      { name: 'run-all', args: '--kind <kind> [--month]', interactive: false },
-      { name: 'list', args: '', interactive: false },
+      { name: 'workflow run', args: '<site> <workflow> [--dry-run] [--month] [--date-stamp[=YYYY-MM-DD]] [--headed]', interactive: false },
+      { name: 'workflow run-all', args: '--kind <kind> [--month]', interactive: false },
+      { name: 'site list', args: '', interactive: false },
       { name: 'describe', args: '', interactive: false },
     ],
     sinks: ['local', 'drive-raw'],

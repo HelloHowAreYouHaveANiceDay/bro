@@ -15,17 +15,17 @@ portals into an accounting pipeline.
 
 ## Auth model (why there are no passwords here)
 
-`bro auth <site>` opens a real browser via Playwright `codegen`; **you** log in (and clear MFA) by
+`bro auth login <site>` opens a real browser via Playwright `codegen`; **you** log in (and clear MFA) by
 hand. Only the resulting `storageState` (`auth.json`) is saved — **no password is ever stored or
-typed by the tool.** `auth.json` is gitignored and local-only. When it expires, re-run `bro auth`.
+typed by the tool.** `auth.json` is gitignored and local-only. When it expires, re-run `bro auth login`.
 
 ## Quickstart
 
 ```bash
 npm install
 cp .env.example .env            # set BRO_SINK, paths, browser channel
-npx tsx src/cli.ts auth cloudflare-stg          # human logs in once
-npx tsx src/cli.ts run cloudflare-stg invoices --month 2026-06
+npx tsx src/cli.ts auth login cloudflare-stg     # human logs in once
+npx tsx src/cli.ts workflow run cloudflare-stg invoices --month 2026-06
 ```
 
 (Optionally `npm link` so `bro …` works directly.)
@@ -34,17 +34,20 @@ npx tsx src/cli.ts run cloudflare-stg invoices --month 2026-06
 
 | Verb | What it does | Human? |
 |------|--------------|--------|
-| `auth <site>` | log in; save `auth.json` (launch-mode sites) | **yes** |
-| `session start\|stop <site>` | open/close a long-lived logged-in browser session (banks) | start = **yes** |
-| `sessions` | list live sessions | no |
+| `auth login <site>` | log in; save `auth.json` (launch-mode sites) | **yes** |
+| `session launch\|quit <site>` | open/close a long-lived logged-in browser session (banks) | launch = **yes** |
+| `session list` | list live sessions | no |
+| `page open <url>` | open a URL in the scratch browser | no |
+| `page exec <site> <action>` | drive a live session tab | no |
 | `record <site> <wf>` | optional: demo a task to seed a workflow | yes |
 | `new <site> <wf> --kind <k>` | scaffold a typed workflow skeleton | no |
-| `test <site> <wf>` | dry-run (no files shipped) + failure artifacts | no |
-| `run <site> <wf> [--month] [--headed]` | run + ship files through the sink | no |
-| `run-all --kind <k> [--month]` | run every workflow of a kind across sites | no |
-| `list` / `describe` | discovery / machine capability doc | no |
+| `workflow run <site> <wf> --dry-run` | dry-run (no files shipped) + failure artifacts | no |
+| `workflow run <site> <wf> [--month] [--headed]` | run + ship files through the sink | no |
+| `workflow run-all --kind <k> [--month]` | run every workflow of a kind across sites | no |
+| `site list` / `describe` | discovery / machine capability doc | no |
 
 Every non-interactive verb takes `--json` for a stable `{ ok, result | error }` envelope.
+The old CLI spellings (`auth`, `session start|stop`, `sessions`, `open`, `page`, `test`, `run`, `run-all`, and `list`) still work as aliases.
 
 ## Sinks
 
@@ -61,16 +64,16 @@ Per-site fields in `site.json`:
   For sites (banks behind Akamai/DataDome) that blank a fresh automated context. The login lives in
   the profile, not `auth.json`.
 - `interactive: true` — the session can't be stored unattended (banks use short-lived in-memory
-  cookies). `bro run`/`test` open the browser, wait for you to reach the dashboard, then run in that
+  cookies). `bro workflow run` opens the browser, waits for you to reach the dashboard, then runs in that
   **same live session**.
 
 **Live sessions** — log in once, keep it open, run many (solves the unstorable bank session):
 
 ```bash
-bro session start chase-stg   # opens the real browser; you log in; it stays alive on a CDP port
-bro run chase-stg statements  # attaches over CDP, drives it, does NOT close the browser
-bro sessions                  # list live sessions
-bro session stop chase-stg    # end it
+bro session launch chase-stg  # opens the real browser; you log in; it stays alive on a CDP port
+bro workflow run chase-stg statements  # attaches over CDP, drives it, does NOT close the browser
+bro session list              # list live sessions
+bro session quit chase-stg     # end it
 ```
 
 ## Open-source note

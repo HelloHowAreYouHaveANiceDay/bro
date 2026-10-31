@@ -7,7 +7,7 @@
  * response). stdout carries ONLY the frame; all human/log output goes to stderr. This is the
  * driver-facing wire; the CLI (src/cli.ts) is the human-facing wire and stays as-is.
  *
- * Browser/runner imports are LAZY (dynamic) so describe/doctor/version/list -- the conformance
+ * Browser/runner imports are LAZY (dynamic) so describe/doctor/version/site list -- the conformance
  * surface -- work without Playwright loaded.
  */
 import fs from 'node:fs';
@@ -16,6 +16,7 @@ import tty from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import { BroError } from './lib/errors.ts';
+import { canonicalMethod } from './lib/verbs.ts';
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
@@ -51,10 +52,27 @@ export function describeDoc(): Record<string, unknown> {
     verbs: [
       { name: 'doctor', description: 'health check (node, playwright, sites)', args: [], output: 'json' },
       { name: 'version', description: 'driver name + version', args: [], output: 'json' },
-      { name: 'list', description: 'sites x workflows x auth freshness', args: [], output: 'json' },
-      { name: 'sessions', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json' },
+      { name: 'site list', description: 'sites x workflows x auth freshness', args: [], output: 'json' },
+      { name: 'session list', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json' },
       {
-        name: 'open',
+        name: 'session launch',
+        description: 'start a live browser session (start needs --detach via the driver; attached start is INTERACTIVE -- use the bro CLI)',
+        interactive: true,
+        args: [
+          { name: 'site', type: 'string', required: true, positional: true },
+          { name: 'detach', type: 'bool', help: 'start: run the session host as its own process; returns once LIVE' },
+        ],
+        output: 'json',
+      },
+      {
+        name: 'session quit',
+        description: 'stop a live browser session (interactive -- use the bro CLI)',
+        interactive: true,
+        args: [{ name: 'site', type: 'string', required: true, positional: true }],
+        output: 'json',
+      },
+      {
+        name: 'page open',
         description: 'open a URL in a tab of a LIVE session (default: built-in scratch browser, started detached on demand)',
         args: [
           { name: 'url', type: 'string', required: true, positional: true },
@@ -63,7 +81,7 @@ export function describeDoc(): Record<string, unknown> {
         output: 'json',
       },
       {
-        name: 'page',
+        name: 'page exec',
         description: 'drive a LIVE session tab by site id: tabs|text|eval|goto|click|type|key|shot|capture|close',
         args: [
           { name: 'site', type: 'string', required: true, positional: true },
@@ -79,7 +97,7 @@ export function describeDoc(): Record<string, unknown> {
         output: 'json',
       },
       {
-        name: 'run',
+        name: 'workflow run',
         description: 'run a site workflow (download/read/write)',
         args: [
           { name: 'site', type: 'string', required: true, positional: true, help: 'site id' },
@@ -87,26 +105,15 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'month', type: 'string', help: 'target month YYYY-MM (default: previous)' },
           { name: 'dateStamp', type: 'string', help: 'stamp saved filenames with YYYY-MM-DD to avoid snapshot collisions' },
           { name: 'headed', type: 'bool', help: 'run headed (visible browser)' },
+          { name: 'dry-run', type: 'bool', help: 'stage the workflow and ship nothing (was `test`)' },
         ],
         // Any other --key value is the workflow's own param (e.g. `--url` for espn api).
-        extra_args: true,
-        output: 'json',
-      },
-      {
-        name: 'test',
-        description: 'dry-run a workflow (stages, ships nothing)',
-        args: [
-          { name: 'site', type: 'string', required: true, positional: true },
-          { name: 'workflow', type: 'string', required: true, positional: true },
-          { name: 'month', type: 'string' },
-          { name: 'dateStamp', type: 'string' },
-        ],
         extra_args: true,
         output: 'json',
         supports_dry_run: true,
       },
       {
-        name: 'run-all',
+        name: 'workflow run-all',
         description: 'run every workflow of a kind across sites',
         args: [
           { name: 'kind', type: 'string', required: true, help: 'workflow kind (invoices|statements|...)' },
@@ -115,22 +122,11 @@ export function describeDoc(): Record<string, unknown> {
         output: 'json',
       },
       {
-        name: 'auth',
+        name: 'auth login',
         description: 'capture site auth (INTERACTIVE -- use the bro CLI, not the driver)',
         interactive: true,
         human_steps: ['open a browser', 'log in + clear MFA'],
         args: [{ name: 'site', type: 'string', required: true, positional: true }],
-        output: 'json',
-      },
-      {
-        name: 'session',
-        description: 'start/stop a live browser session (start needs --detach via the driver; attached start is INTERACTIVE -- use the bro CLI)',
-        interactive: true,
-        args: [
-          { name: 'op', type: 'string', required: true, positional: true, help: 'start|stop' },
-          { name: 'site', type: 'string', required: true, positional: true },
-          { name: 'detach', type: 'bool', help: 'start: run the session host as its own process; returns once LIVE' },
-        ],
         output: 'json',
       },
     ],
@@ -208,7 +204,7 @@ export async function doctor(): Promise<Record<string, unknown>> {
     detail: sitesBroken ? 'sites directory exists but cannot be read' : `${nSites} site(s) configured`,
     ...(sitesOk ? {} : {
       hint: sitesBroken ? 'check permissions on the sites directory' : 'no sites yet',
-      fix: 'bro auth <site> to add one',
+      fix: 'bro auth login <site> to add one',
     }),
   });
 
@@ -236,7 +232,8 @@ function localDateStamp(now: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+export async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+  ({ method, params } = canonicalMethod(method, params));
   switch (method) {
     case 'describe':
       return describeDoc();
@@ -244,9 +241,9 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       return { name: 'bro', version: VERSION };
     case 'doctor':
       return doctor();
-    case 'list':
+    case 'site.list':
       return siteList();
-    case 'sessions': {
+    case 'session.list': {
       const { readSessions, probeCDP } = await import('./lib/sessions.ts');
       const { pidAlive } = await import('./lib/page.ts');
       const all = readSessions();
@@ -257,11 +254,11 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       }
       return { sessions: rows };
     }
-    case 'open': {
+    case 'page.open': {
       const { openUrl } = await import('./lib/pageActions.ts');
       return openUrl(String(params.url ?? ''), params.site ? String(params.site) : 'scratch');
     }
-    case 'page': {
+    case 'page.exec': {
       const { pageAction } = await import('./lib/pageActions.ts');
       const num = (v: unknown) => (v === undefined || v === null || v === '' ? undefined : Number(v));
       return pageAction(String(params.site ?? ''), String(params.action ?? ''), params.arg === undefined ? undefined : String(params.arg), {
@@ -273,18 +270,21 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         out: params.out ? String(params.out) : undefined,
       });
     }
-    case 'run':
-    case 'test': {
+    case 'workflow.run': {
       const site = String(params.site ?? '');
       const workflow = String(params.workflow ?? '');
-      if (!site || !workflow) throw new BroError('bad-args', `${method} requires site + workflow`);
+      if (!site || !workflow) throw new BroError('bad-args', `${method.replaceAll('.', ' ')} requires site + workflow`);
       const { runWorkflow } = await import('./lib/runner.ts');
       const now = new Date();
       const requestedDateStamp = params.dateStamp ?? params['date-stamp'];
+      const cliParams = workflowParams(params);
+      delete cliParams['dry-run'];
+      delete cliParams.dry_run;
+      delete cliParams.dryRun;
       const manifest = await runWorkflow({
         siteId: site,
         workflowName: workflow,
-        cliParams: workflowParams(params),
+        cliParams,
         month: params.month ? String(params.month) : undefined,
         dateStamp:
           requestedDateStamp === true
@@ -293,16 +293,16 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
               ? requestedDateStamp
               : undefined,
         headed: params.headed === true || params.headed === 'true',
-        dryRun: method === 'test',
+        dryRun: [params['dry-run'], params.dry_run, params.dryRun].some((v) => v === true || v === 'true'),
         stampIso: now.toISOString().replace(/[:.]/g, '-'),
         now,
         mirror: false,
       });
       return manifest;
     }
-    case 'run-all': {
+    case 'workflow.run-all': {
       const kind = String(params.kind ?? '');
-      if (!kind) throw new BroError('bad-args', 'run-all requires kind');
+      if (!kind) throw new BroError('bad-args', 'workflow run-all requires kind');
       const { runWorkflow } = await import('./lib/runner.ts');
       const now = new Date();
       const summary: Array<Record<string, unknown>> = [];
@@ -327,23 +327,24 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       }
       return { summary };
     }
-    case 'session':
-      if (String(params.op ?? '') === 'start' && (params.detach === true || params.detach === 'true')) {
+    case 'session.launch':
+      if (params.detach === true || params.detach === 'true') {
         const site = String(params.site ?? '');
-        if (!site) throw new BroError('bad-args', 'session start requires site');
+        if (!site) throw new BroError('bad-args', 'session launch requires site');
         loadSite(site);
         const { startDetached } = await import('./lib/detach.ts');
         return startDetached(site);
       }
-      if (String(params.op ?? '') === 'stop') {
-        throw new BroError('bad-args', 'session stop: use the bro CLI (`bro session stop <site>`)', { hint: 'bro session stop <site>' });
-      }
-    // falls through: attached start is interactive
-    case 'auth':
+      throw new BroError('bad-args', '`session launch` is interactive -- run it via the bro CLI', {
+        needsHuman: true, hint: 'bro session launch ...',
+      });
+    case 'session.quit':
+      throw new BroError('bad-args', 'session quit: use the bro CLI (`bro session quit <site>`)', { hint: 'bro session quit <site>' });
+    case 'auth.login':
     case 'record':
       throw new BroError('bad-args', `\`${method}\` is interactive -- run it via the bro CLI, not the driver`, {
         needsHuman: true,
-        hint: `bro ${method} ...`,
+        hint: `bro ${method.replaceAll('.', ' ')} ...`,
       });
     default:
       throw Object.assign(new Error(`unknown method: ${method}`), { rpcKind: 'unknown-method', rpcHint: 'see `describe`' });
@@ -402,7 +403,7 @@ async function main(): Promise<void> {
     const kind = NORMALIZE_KIND[String(env.kind)] ?? String(env.kind);
     const data: Record<string, unknown> = { kind, retriable: env.retriable ?? false };
     if (env.hint) data.hint = env.hint;
-    if (env.needsHuman) data.remediation = { verb: `bro ${req.method}`, interactive: true };
+    if (env.needsHuman) data.remediation = { verb: `bro ${req.method.replaceAll('.', ' ')}`, interactive: true };
     writeFrame({ jsonrpc: '2.0', error: { code: codeFor(kind), message: env.message, data }, id });
     process.exit(0); // exit 0 after writing any valid response frame
   }

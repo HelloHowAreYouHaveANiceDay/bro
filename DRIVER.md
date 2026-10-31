@@ -2,7 +2,7 @@
 
 bro has two front doors over the same workflow engine:
 
-- **CLI** (`src/cli.ts`, `bro <verb> ...`) — the human/agent-facing surface. Unchanged.
+- **CLI** (`src/cli.ts`, `bro <verb> ...`) — the human/agent-facing surface.
 - **JSON-RPC driver** (`src/driver.ts`, published as `bim-bro.exe`) — the bim-cli driver-facing
   surface: one JSON-RPC 2.0 request on stdin → one response on stdout per process spawn, so
   `bim bro <verb>` routes through the dispatcher. Passes `bim driver-conformance bro` (17/17).
@@ -13,9 +13,23 @@ bro has two front doors over the same workflow engine:
   `{"jsonrpc":"2.0","result":...|error:{code,message,data:{kind,...}},"id":1}` line to stdout;
   exits 0 after any valid response (even an error). stdout carries ONLY the frame — logs go to stderr.
 - TTY guard: bare run in a terminal prints a hint and exits 1 (never blocks on stdin).
-- Verbs: `describe`, `doctor`, `version`, `list`, `sessions`, `run`, `test`, `run-all`. The
-  interactive verbs (`auth`, `session`) are declared in `describe` but return a "use the CLI"
+- Verbs: `doctor`, `version`, `site list`, `session list`, `session launch`, `session quit`,
+  `page open`, `page exec`, `workflow run`, `workflow run-all`, `auth login`. The
+  interactive verbs (`auth login`, `session launch`, `session quit`) are declared in `describe` but return a "use the CLI"
   error in driver mode (they need a human / a long-lived process).
+- Old wire methods remain available as aliases:
+
+  | Old method | Canonical name |
+  | --- | --- |
+  | `list` | `site list` |
+  | `sessions` | `session list` |
+  | `session` with `op=start` / `op=stop` | `session launch` / `session quit` |
+  | `open` | `page open` |
+  | `page` | `page exec` |
+  | `run` | `workflow run` |
+  | `test` | `workflow run --dry-run` |
+  | `run-all` | `workflow run-all` |
+  | `auth` | `auth login` |
 - Error `kind` → JSON-RPC code per the bim-cli table; `auth-expired` is normalized to
   `auth_required` so the dispatcher's oauth intercept fires.
 

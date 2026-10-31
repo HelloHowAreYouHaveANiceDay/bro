@@ -1,18 +1,18 @@
 # AGENTS.md — how an agent drives bro
 
-bro is built to be operated by agents. After a human does the **one** human step (`bro auth`),
+bro is built to be operated by agents. After a human does the **one** human step (`bro auth login`),
 an agent can author, test, and run workflows autonomously.
 
 ## Contract
 
 - **Discover, don't guess:** `bro describe --json` (verbs + sites + workflows + kinds) and
-  `bro list --json` (auth freshness). Never hardcode site/workflow names.
+  `bro site list --json` (auth freshness). Never hardcode site/workflow names. Legacy CLI spellings still work as aliases.
 - **Structured I/O:** every non-interactive verb accepts `--json` and returns `{ ok, result }` or
   `{ ok, error }`. On any failure the error envelope is printed to **stdout** as JSON even without
   `--json`. Exit code is 0 on success, 1 on error.
 - **Branch on the error, don't parse prose.** Errors have `{ kind, retriable, needsHuman, hint }`:
   - `auth-expired` → `needsHuman: true` — you cannot fix this; tell the human to run the hinted
-    `bro auth <site>`.
+    `bro auth login <site>`.
   - `bot-blocked` → `retriable: true` — retry with `--headed`.
   - `no-downloads` → the selectors likely broke; read the run log + `failure.png` under
     `.bro/runs/<id>/` and repair the workflow.
@@ -30,13 +30,13 @@ since redirect-heavy SPAs abort their own pending navigations.
 
 bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
 
-- `bro session start <site> --detach` runs the session host as its own process and returns once it
+- `bro session launch <site> --detach` runs the session host as its own process and returns once it
   is LIVE (`{site, port, pid, status: started|already-running, log}`). The browser survives the
   caller's shell or gateway being killed/restarted. Starting an already-LIVE site is a no-op.
-- `bro open <url> [--site <id>]` opens a tab, by default in the built-in **`scratch`** site (its own
+- `bro page open <url> [--site <id>]` opens a tab, by default in the built-in **`scratch`** site (its own
   empty profile, started detached on demand). Use scratch for public pages (search, tracking, docs);
   never ride a vendor's logged-in profile for unrelated browsing.
-- `bro page <site> <action>` drives a LIVE session's tab **by site id** (no port numbers):
+- `bro page exec <site> <action>` drives a LIVE session's tab **by site id** (no port numbers):
   `tabs`, `text [--max N]`, `eval <js>`, `goto <url>`, `click <css>` (real mouse events), `type
   <text>` (into the focused element), `key <Enter|Tab|...>`, `shot <out.png> [--full]`, `capture
   <url-substr> [--reload] [--wait ms] [--out file]` (the page's own XHR/fetch response bodies, i.e.
@@ -45,7 +45,7 @@ bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
   domain and refuses (listing candidates) when that is ambiguous.
 - Page verbs talk raw CDP and never close or take over the human's session. Same read-only rule as
   workflows in financial accounts: navigate and read; never click pay/transfer/cancel controls.
-- `bro sessions` reports `stale (host gone)` when a row's host pid is dead, even if some other
+- `bro session list` reports `stale (host gone)` when a row's host pid is dead, even if some other
   browser now answers on that port.
 
 ## Sessions (banks / hardened sites)
@@ -53,37 +53,37 @@ bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
 Some sites (banks) can't have their session stored for unattended runs, and a fresh automated
 context gets bot-blocked. For a site with `browser: 'persistent'` + `interactive: true`:
 
-1. A **human** runs `bro session start <site>` once and logs in; the real browser stays open on a
-   CDP port. `bro sessions --json` lists live sessions.
-2. **You** run `bro run <site> <workflow>` — it attaches to the live session over CDP and drives it
+1. A **human** runs `bro session launch <site>` once and logs in; the real browser stays open on a
+   CDP port. `bro session list --json` lists live sessions.
+2. **You** run `bro workflow run <site> <workflow>` — it attaches to the live session over CDP and drives it
    WITHOUT closing. No `auth.json`, no re-login while the session is alive.
-3. If the session expired, `bro run` prompts the human to log in again in the live window
+3. If the session expired, `bro workflow run` prompts the human to log in again in the live window
    (`auth-expired`, needsHuman).
 
 4. When attached to a live session over CDP, teardown must only drop the CDP client connection:
    let the process exit / detach, and never call `browser.close()` or `context.close()` on that
    session. `src/lib/session.ts:46` is the canonical safe pattern to preserve.
 
-Do NOT `bro auth` persistent/interactive sites — auth happens at `session start` / run time in the
+Do NOT `bro auth login` persistent/interactive sites — auth happens at `session launch` / run time in the
 real profile.
 
 ## Authoring a new workflow (autonomous)
 
-1. Ensure the site exists and is authed (`bro list --json`). If not authed, ask a human to
-   `bro auth <site>` — you cannot log in.
+1. Ensure the site exists and is authed (`bro site list --json`). If not authed, ask a human to
+   `bro auth login <site>` — you cannot log in.
 2. `bro new <site> <workflow> --kind <kind>` — scaffolds a typed skeleton.
 3. Explore the **already-authenticated** live session to find the invoice table / download
    controls (use playwright-cli `snapshot`, loading the site's `auth.json`).
 4. Fill in the workflow: navigate → enumerate rows for `ctx.params.ym` → `ctx.save(download, name,
    id)` (real download event) or `ctx.saveUrl(url, name, id)` (inline-rendered PDF).
    - Deterministic names: `${ctx.site.source}-${invoiceId-or-date}.pdf` (enables dedup).
-5. `bro test <site> <workflow>` — dry-run (nothing shipped); iterate until it reports files.
-6. Ship for real with `bro run <site> <workflow> --month <YYYY-MM>`.
+5. `bro workflow run <site> <workflow> --dry-run` — dry-run (nothing shipped); iterate until it reports files.
+6. Ship for real with `bro workflow run <site> <workflow> --month <YYYY-MM>`.
 
 ## `read` workflows — scrape live data instead of downloading a file
 
 Set `mode: 'read'` on the workflow and return `Row[]` (`Record<string, unknown>[]`) instead of
-`DownloadedFile[]`. The runner ships nothing to the sink; `bro run <site> <workflow> --json` emits
+`DownloadedFile[]`. The runner ships nothing to the sink; `bro workflow run <site> <workflow> --json` emits
 `{ ok, result: { rows: [...] } }`, and `minExpected` gates the min **row** count. Use this for the
 live data an OAuth/API used to serve (quotes, watchlist, balances, orders) — e.g. `sites/schwab/
 workflows/watchlist.ts` + `quotes.ts`. Same **read-only** rule as below: navigate + DOM-read ONLY.
@@ -99,9 +99,9 @@ worked example: a bare `page.goto()` to a tokenless or stale-token app URL is tr
 
 ## Schwab gotchas (Order Status export + sessions)
 
-- **`bro run` alone uses an EPHEMERAL browser and re-prompts login every run.** For iterative
-  work (building/debugging a workflow) use `bro session start schwab` once (persistent CDP,
-  one login, reused by every subsequent `bro run`). Schwab's trade/order pages ALSO trigger a
+- **`bro workflow run` alone uses an EPHEMERAL browser and re-prompts login every run.** For iterative
+  work (building/debugging a workflow) use `bro session launch schwab` once (persistent CDP,
+  one login, reused by every subsequent `bro workflow run`). Schwab's trade/order pages ALSO trigger a
   step-up re-auth even in an otherwise-authed session -- that is the "second login", one-time
   per session, completed in the live window.
 - **`BRO_SINK=local`** writes CSVs to the local ledger tree and bypasses the Drive sink -- use
@@ -117,7 +117,7 @@ worked example: a bare `page.goto()` to a tokenless or stale-token app URL is tr
 - **The export->download needs a HEALTHY session.** A long-idle/degraded one ("Your Session
   Will Expire Soon -- error extending your session") silently stops firing downloads while grid
   reads still work; the tell is `waitForEvent('download')` timing out on every account. Restart
-  with `bro session start schwab`.
+  with `bro session launch schwab`.
 - **Multi-account works, but the account switch is finicky.** There is no "all accounts" view;
   `--accounts=all` / `--only=<acct>` iterate the `sdps-account-selector`. The dropdown is a
   `button[aria-haspopup]` toggle that MUST be clicked to open the panel first -- only then do the
