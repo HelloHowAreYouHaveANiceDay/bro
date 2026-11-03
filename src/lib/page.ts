@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { BroError } from './errors.ts';
 import { getSession, probeCDP, type LiveSession } from './sessions.ts';
 
@@ -266,6 +267,75 @@ export async function screenshot(cdp: PageCDP, out: string, fullPage = false): P
   const buf = Buffer.from(r.data, 'base64');
   fs.writeFileSync(out, buf);
   return { path: out, bytes: buf.length };
+}
+
+/**
+ * Set files on an `<input type=file>` -- the raw-CDP equivalent of Playwright's `setInputFiles`
+ * (Playwright itself sends `DOM.setFileInputFiles`), so no Playwright attach touches the live session.
+ *
+ * - direct: `selector` names the input (hidden inputs are fine: no visibility check, no click).
+ * - `click`: some sites build the input only when their button is pressed. Intercept the file chooser
+ *   (`Page.setInterceptFileChooserDialog`, so no native dialog opens), click `click` with real mouse
+ *   events, and fill the input reported by `Page.fileChooserOpened`.
+ * Files are resolved to absolute paths and must exist. Chromium fires `input` + `change` itself.
+ */
+export async function uploadFiles(
+  cdp: PageCDP,
+  selector: string | undefined,
+  files: string[],
+  opts: { click?: string; waitMs?: number } = {},
+): Promise<{ files: string[]; via: 'input' | 'filechooser'; mode?: string }> {
+  if (!files.length) throw new BroError('bad-args', 'upload needs at least one file');
+  const abs = files.map((f) => path.resolve(f));
+  const missing = abs.filter((f) => !fs.existsSync(f) || !fs.statSync(f).isFile());
+  if (missing.length) throw new BroError('bad-args', `file not found: ${missing.join(', ')}`);
+
+  if (opts.click) {
+    const waitMs = opts.waitMs || 10000;
+    await cdp.send('Page.enable');
+    const opened = new Promise<{ backendNodeId: number; mode: string } | null>((resolve) => {
+      const t = setTimeout(() => resolve(null), waitMs);
+      cdp.on((method, p) => {
+        if (method === 'Page.fileChooserOpened') {
+          clearTimeout(t);
+          resolve({ backendNodeId: Number(p['backendNodeId']), mode: String(p['mode'] ?? '') });
+        }
+      });
+    });
+    await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true });
+    try {
+      await clickSelector(cdp, opts.click);
+      const chooser = await opened;
+      if (!chooser) throw new BroError('not-found', `clicking ${opts.click} opened no file chooser within ${waitMs} ms`, { retriable: true });
+      if (chooser.mode === 'selectSingle' && abs.length > 1)
+        throw new BroError('bad-args', `the file chooser takes one file; got ${abs.length}`);
+      await cdp.send('DOM.setFileInputFiles', { files: abs, backendNodeId: chooser.backendNodeId });
+      return { files: abs, via: 'filechooser', mode: chooser.mode };
+    } finally {
+      await cdp.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => undefined);
+    }
+  }
+
+  if (!selector) throw new BroError('bad-args', 'usage: bro page exec <site> upload <input-css> <file...>  (or --click <button-css> <file...>)');
+  const r = await cdp.send<{ result: { objectId?: string; subtype?: string } }>('Runtime.evaluate', {
+    expression: `document.querySelector(${JSON.stringify(selector)})`,
+    returnByValue: false,
+  });
+  const objectId = r.result?.objectId;
+  if (!objectId || r.result.subtype === 'null') throw new BroError('not-found', `no element matches ${selector}`);
+  const kind = await cdp.send<{ result: { value?: unknown } }>('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration: 'function () { return this instanceof HTMLInputElement ? { type: this.type, multiple: this.multiple } : { type: this.tagName.toLowerCase() } }',
+    returnByValue: true,
+  });
+  const info = (kind.result?.value ?? {}) as { type?: string; multiple?: boolean };
+  if (info.type !== 'file')
+    throw new BroError('bad-args', `${selector} is not an <input type=file> (got ${info.type ?? 'unknown'})`, {
+      hint: "point at the input, or pass --click <button-css> to open the site's file chooser",
+    });
+  if (!info.multiple && abs.length > 1) throw new BroError('bad-args', `${selector} takes one file (no multiple attribute); got ${abs.length}`);
+  await cdp.send('DOM.setFileInputFiles', { files: abs, objectId });
+  return { files: abs, via: 'input' };
 }
 
 /**
