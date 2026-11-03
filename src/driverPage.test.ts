@@ -8,7 +8,7 @@ describe('driver describe: page verbs', () => {
 
   it('exposes open and page so `bim bro open|page` route to the driver', () => {
     expect(byName['page open']!.args.map((a) => a.name)).toEqual(['url', 'site']);
-    expect(byName['page exec']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out']);
+    expect(byName['page exec']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out', 'files', 'click']);
   });
 
   it('session takes --detach', () => {
@@ -24,6 +24,7 @@ describe('pageAction arg validation', () => {
   it('rejects unknown actions before touching any session', async () => {
     await expect(pageAction('scratch', 'explode', undefined)).rejects.toMatchObject({ kind: 'bad-args' });
     expect(PAGE_ACTIONS).toContain('capture');
+    expect(PAGE_ACTIONS).toContain('upload');
   });
   it('requires site and action', async () => {
     await expect(pageAction('', '', undefined)).rejects.toMatchObject({ kind: 'bad-args' });

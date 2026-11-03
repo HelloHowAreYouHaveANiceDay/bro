@@ -4,7 +4,7 @@ import { loadSite } from './registry.ts';
 import { startDetached, liveSession } from './detach.ts';
 import {
   resolveLive, listTabs, pickTab, PageCDP, clickSelector, typeText, pressKey, gotoUrl, screenshot,
-  captureResponses, openTab, closeTab,
+  captureResponses, openTab, closeTab, uploadFiles,
 } from './page.ts';
 
 /**
@@ -13,10 +13,10 @@ import {
  * nothing.
  */
 
-export const PAGE_ACTIONS = ['tabs', 'text', 'eval', 'goto', 'click', 'type', 'key', 'shot', 'capture', 'close'] as const;
+export const PAGE_ACTIONS = ['tabs', 'text', 'eval', 'goto', 'click', 'type', 'key', 'shot', 'capture', 'upload', 'close'] as const;
 
 export const PAGE_USAGE =
-  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] | click <css> | type <text> | key <Key> | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | close  [--tab <id|url-substr>]';
+  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] | click <css> | type <text> | key <Key> | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | upload <input-css> <file...> | upload --click <button-css> <file...> [--wait ms] | close  [--tab <id|url-substr>]';
 
 export interface PageOpts {
   tab?: string;
@@ -25,6 +25,10 @@ export interface PageOpts {
   reload?: boolean;
   full?: boolean;
   out?: string;
+  /** upload: extra file paths after the first positional */
+  files?: string[];
+  /** upload: click this to open the site's file chooser instead of naming the input */
+  click?: string;
 }
 
 export async function openUrl(url: string, siteId = 'scratch'): Promise<Record<string, unknown>> {
@@ -103,6 +107,17 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         const rows = await captureResponses(cdp, match, { reload: !!opts.reload, waitMs: wait || 15000 });
         if (opts.out) fs.writeFileSync(opts.out, JSON.stringify(rows));
         result = { match, count: rows.length, ...(opts.out ? { out: opts.out } : { responses: rows }) };
+        break;
+      }
+      case 'upload': {
+        // `upload <input-css> <file...>` or `upload --click <button-css> <file...>` (then every positional is a file).
+        const positional = [...(arg !== undefined && arg !== '' ? [arg] : []), ...(opts.files ?? [])];
+        const files = opts.click ? positional : positional.slice(1);
+        const selector = opts.click ? undefined : positional[0];
+        if (!files.length)
+          throw new BroError('bad-args', 'usage: bro page exec <site> upload <input-css> <file...>  |  upload --click <button-css> <file...>');
+        const up = await uploadFiles(cdp, selector, files, { click: opts.click, waitMs: wait || undefined });
+        result = { ...(selector ? { selector } : { click: opts.click }), ...up };
         break;
       }
       default:

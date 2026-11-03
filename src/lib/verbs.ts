@@ -21,6 +21,12 @@ export function pageOptsFromParams(params: Record<string, unknown>): PageOpts {
     reload: params.reload === true || params.reload === 'true',
     full: params.full === true || params.full === 'true',
     out: params.out ? String(params.out) : undefined,
+    click: params.click ? String(params.click) : undefined,
+    files: Array.isArray(params.files)
+      ? params.files.map(String)
+      : params.files
+        ? String(params.files).split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined,
   };
 }
 
