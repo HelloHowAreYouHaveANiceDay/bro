@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import http from 'node:http';
 import { WebSocketServer } from './testWsServer.ts';
-import { pickTab, resolveLive, pidAlive, PageCDP, listTabs, captureResponses, type TabInfo } from './page.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pickTab, resolveLive, pidAlive, PageCDP, listTabs, captureResponses, uploadFiles, type TabInfo } from './page.ts';
 import { detachedArgv, startDetached, DETACHED_ENV } from './detach.ts';
 import { pickLoginPage } from './session.ts';
 import { loadSite, listSites } from './registry.ts';
@@ -156,6 +159,100 @@ describe('PageCDP against a fake CDP target', () => {
       expect((await listTabs(port)).map((t) => t.id)).toEqual(['1']);
     } finally {
       server.close();
+    }
+  });
+});
+
+describe('uploadFiles against a fake CDP target', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bro-upload-'));
+  const a = path.join(dir, 'a.png');
+  const b = path.join(dir, 'b.png');
+  fs.writeFileSync(a, 'x');
+  fs.writeFileSync(b, 'y');
+
+  /** fake page: `input` = what document.querySelector finds; `chooser` = what a click opens. */
+  async function fakePage(page: { input?: { type: string; multiple: boolean } | null; chooser?: { mode: string } | null }) {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const srv = await WebSocketServer.start((msg, send) => {
+      const { id, method, params } = msg as { id: number; method: string; params: Record<string, unknown> };
+      calls.push({ method, params });
+      if (method === 'Runtime.evaluate') {
+        if (String(params['expression']).startsWith('document.querySelector'))
+          return send({ id, result: { result: page.input ? { type: 'object', objectId: 'obj-1' } : { type: 'object', subtype: 'null' } } });
+        return send({ id, result: { result: { value: { x: 10, y: 20 } } } }); // CENTER_JS for --click
+      }
+      if (method === 'Runtime.callFunctionOn') return send({ id, result: { result: { value: page.input } } });
+      send({ id, result: {} });
+      if (method === 'Input.dispatchMouseEvent' && params['type'] === 'mouseReleased' && page.chooser)
+        send({ method: 'Page.fileChooserOpened', params: { frameId: 'f', mode: page.chooser.mode, backendNodeId: 77 } });
+    });
+    const cdp = await PageCDP.connect({ ...tab('T', 'https://x.test/'), webSocketDebuggerUrl: srv.url });
+    return { cdp, calls, stop: async () => (cdp.close(), srv.stop()) };
+  }
+
+  it('sets absolute paths on a (possibly hidden) file input via DOM.setFileInputFiles', async () => {
+    const f = await fakePage({ input: { type: 'file', multiple: true } });
+    try {
+      const r = await uploadFiles(f.cdp, 'input[type=file]', [a, path.relative(process.cwd(), b)]);
+      expect(r).toEqual({ files: [a, b], via: 'input' });
+      expect(f.calls.find((c) => c.method === 'DOM.setFileInputFiles')?.params).toEqual({ files: [a, b], objectId: 'obj-1' });
+      expect(f.calls.some((c) => c.method === 'Input.dispatchMouseEvent')).toBe(false);
+    } finally {
+      await f.stop();
+    }
+  });
+
+  it('refuses a non-file element, a missing element, several files on a single input, and missing files', async () => {
+    const notFile = await fakePage({ input: { type: 'button', multiple: false } });
+    try {
+      await expect(uploadFiles(notFile.cdp, 'button', [a])).rejects.toMatchObject({ kind: 'bad-args', message: /not an <input type=file>/ });
+    } finally {
+      await notFile.stop();
+    }
+    const single = await fakePage({ input: { type: 'file', multiple: false } });
+    try {
+      await expect(uploadFiles(single.cdp, 'input', [a, b])).rejects.toMatchObject({ kind: 'bad-args', message: /takes one file/ });
+      await expect(uploadFiles(single.cdp, 'input', [path.join(dir, 'nope.png')])).rejects.toMatchObject({ kind: 'bad-args', message: /file not found/ });
+      expect(single.calls.some((c) => c.method === 'DOM.setFileInputFiles')).toBe(false);
+    } finally {
+      await single.stop();
+    }
+    const none = await fakePage({ input: null });
+    try {
+      await expect(uploadFiles(none.cdp, '#missing', [a])).rejects.toMatchObject({ kind: 'not-found' });
+    } finally {
+      await none.stop();
+    }
+  });
+
+  it('--click: intercepts the file chooser the button opens and fills it (no native dialog)', async () => {
+    const f = await fakePage({ chooser: { mode: 'selectMultiple' } });
+    try {
+      const r = await uploadFiles(f.cdp, undefined, [a, b], { click: 'button.upload' });
+      expect(r).toEqual({ files: [a, b], via: 'filechooser', mode: 'selectMultiple' });
+      const order = f.calls.map((c) => c.method);
+      expect(order.indexOf('Page.setInterceptFileChooserDialog')).toBeLessThan(order.indexOf('Input.dispatchMouseEvent'));
+      expect(f.calls.find((c) => c.method === 'DOM.setFileInputFiles')?.params).toEqual({ files: [a, b], backendNodeId: 77 });
+      // interception is switched off again so a later human click gets the normal dialog
+      expect(f.calls.filter((c) => c.method === 'Page.setInterceptFileChooserDialog').map((c) => c.params['enabled'])).toEqual([true, false]);
+    } finally {
+      await f.stop();
+    }
+  });
+
+  it('--click: a click that opens no chooser is a retriable not-found; a single chooser refuses two files', async () => {
+    const f = await fakePage({ chooser: null });
+    try {
+      await expect(uploadFiles(f.cdp, undefined, [a], { click: 'button', waitMs: 200 })).rejects.toMatchObject({ kind: 'not-found', retriable: true });
+    } finally {
+      await f.stop();
+    }
+    const s = await fakePage({ chooser: { mode: 'selectSingle' } });
+    try {
+      await expect(uploadFiles(s.cdp, undefined, [a, b], { click: 'button' })).rejects.toMatchObject({ kind: 'bad-args' });
+      expect(s.calls.some((c) => c.method === 'DOM.setFileInputFiles')).toBe(false);
+    } finally {
+      await s.stop();
     }
   });
 });
