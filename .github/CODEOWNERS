@@ -13,3 +13,9 @@ migrations/          @HelloHowAreYouHaveANiceDay
 /src/lib/auth.ts     @HelloHowAreYouHaveANiceDay
 /src/lib/authGuard.ts @HelloHowAreYouHaveANiceDay
 /.github/CODEOWNERS  @HelloHowAreYouHaveANiceDay
+# coding-standards gate (gate_apply.py)
+/.standards.json     @HelloHowAreYouHaveANiceDay
+/.standards/         @HelloHowAreYouHaveANiceDay
+/.golangci.local.yml @HelloHowAreYouHaveANiceDay
+/.golangci.yml       @HelloHowAreYouHaveANiceDay
+/eslint-suppressions.json @HelloHowAreYouHaveANiceDay
