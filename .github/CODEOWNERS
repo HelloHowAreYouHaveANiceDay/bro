@@ -1,4 +1,5 @@
 # GENERATED -- product-repo sensitive-path gate. DO NOT EDIT BY HAND.
+# Lint/standards config is NOT gated (libo 2026-11-11: quality, not permission risk; a ratchet check guards it).
 # Policy (libo, 2026-10-29): gate only significant risk -- permissions, data leak,
 # or anything that could damage libo's or pyline's reputation. Goal: safe speed.
 # Requires the human owner's review on deploy / CI / auth / secret / migration
@@ -13,9 +14,3 @@ migrations/          @HelloHowAreYouHaveANiceDay
 /src/lib/auth.ts     @HelloHowAreYouHaveANiceDay
 /src/lib/authGuard.ts @HelloHowAreYouHaveANiceDay
 /.github/CODEOWNERS  @HelloHowAreYouHaveANiceDay
-# coding-standards gate (gate_apply.py)
-/.standards.json     @HelloHowAreYouHaveANiceDay
-/.standards/         @HelloHowAreYouHaveANiceDay
-/.golangci.local.yml @HelloHowAreYouHaveANiceDay
-/.golangci.yml       @HelloHowAreYouHaveANiceDay
-/eslint-suppressions.json @HelloHowAreYouHaveANiceDay
