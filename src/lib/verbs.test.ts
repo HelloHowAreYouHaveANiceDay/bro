@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalMethod, parseCliVerb } from './verbs.ts';
+import { canonicalMethod, pageOptsFromParams, parseCliVerb } from './verbs.ts';
 
 describe('canonicalMethod', () => {
   it.each([
@@ -41,5 +41,13 @@ describe('parseCliVerb', () => {
     [['new', 's', 'w'], 'new', ['s', 'w'], false], [['bogus-verb'], 'bogus-verb', [], false], [[], '', [], false],
   ] as const)('parses %j', (input, verb, rest, dryRun) => {
     expect(parseCliVerb([...input])).toEqual({ verb, rest, dryRun });
+  });
+});
+
+describe('pageOptsFromParams (driver) upload options', () => {
+  it('splits comma-separated files, keeps arrays, and passes --click', () => {
+    expect(pageOptsFromParams({ files: 'C:/a.png, C:/b.png', click: 'button.up' })).toMatchObject({ files: ['C:/a.png', 'C:/b.png'], click: 'button.up' });
+    expect(pageOptsFromParams({ files: ['x.png'] }).files).toEqual(['x.png']);
+    expect(pageOptsFromParams({}).files).toBeUndefined();
   });
 });
