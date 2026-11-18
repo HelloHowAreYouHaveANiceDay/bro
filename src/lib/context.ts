@@ -10,7 +10,7 @@ const { chromium } = loadPlaywright();
 import type { DownloadedFile, ReachTarget, SaveOptions, SiteConfig, WorkflowContext } from './types.ts';
 import type { Sink } from './sink.ts';
 import type { RunLog } from './log.ts';
-import { humanPause } from './human.ts';
+import { humanPause, Human, clickPoint, type Box, type HumanTarget } from './human.ts';
 import { sanitizeFilename } from './paths.ts';
 import type { DownloadWatcher } from './downloadWatcher.ts';
 
@@ -40,6 +40,15 @@ function reachLocators(page: Page, target: ReachTarget): Locator[] {
   }
   if (target.text === undefined) return [];
   return DEFAULT_REACH_ROLES.map((role) => page.getByRole(role, { name: target.text }));
+}
+
+function locatorTarget(locator: Locator): HumanTarget {
+  return {
+    box: async () => (await locator.boundingBox().catch(() => null)) as Box | null,
+    scrollIntoView: async () => {
+      await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+    },
+  };
 }
 
 async function firstVisible(locator: Locator): Promise<Locator | null> {
@@ -86,6 +95,32 @@ export function buildContext(args: {
   const { page, context, site, params, sinkFor, defaultSource, defaultYear, defaultMonth, defaultDateStamp, log, tmpDir, browserChannel, downloads } = args;
   fs.mkdirSync(tmpDir, { recursive: true });
 
+  // Lazy CDP session so the human layer drives the same tab through Input.dispatch*; null when the
+  // page/context cannot provide one (non-chromium, test fixtures) -- callers then fall back to Playwright.
+  let humanP: Promise<Human | null> | undefined;
+  function getHuman(): Promise<Human | null> {
+    humanP ??= (async () => {
+      try {
+        const session = await context.newCDPSession(page);
+        const adapter = {
+          send: (method: string, params?: Record<string, unknown>) => (session as unknown as { send(m: string, p?: unknown): Promise<unknown> }).send(method, params),
+          evaluate: (expression: string) => page.evaluate(expression) as Promise<unknown>,
+        };
+        return new Human(adapter);
+      } catch {
+        return null;
+      }
+    })();
+    return humanP;
+  }
+  async function requireHuman(): Promise<Human> {
+    const h = await getHuman();
+    if (!h) throw new Error('ctx.human: no CDP session available for this page');
+    return h;
+  }
+  const locatorOrSelector = (t: string | Locator): Locator => (typeof t === 'string' ? page.locator(t).filter({ visible: true }).first() : t);
+  const targetOf = (t: string | Locator): HumanTarget => locatorTarget(locatorOrSelector(t));
+
   function ensureName(name: string, dateStamp?: string): string {
     const clean = sanitizeFilename(stampNameForDate(name, dateStamp));
     return /\.[A-Za-z0-9]{2,5}$/.test(clean) ? clean : `${clean}.pdf`;
@@ -116,11 +151,32 @@ export function buildContext(args: {
     params,
     log: (msg, extra) => log.line('workflow', { msg, ...(extra ?? {}) }),
 
+    human: {
+      async click(t) {
+        await (await requireHuman()).click(targetOf(t));
+      },
+      async type(text, o) {
+        await (await requireHuman()).type(text, o);
+      },
+      async scroll(t) {
+        await (await requireHuman()).scroll(targetOf(t));
+      },
+      async move(t) {
+        const h = await requireHuman();
+        if (typeof t === 'object' && 'x' in t && 'y' in t) return h.move({ x: t.x, y: t.y });
+        const box = await targetOf(t as string | Locator).box();
+        if (!box) throw new Error('human.move: target is not visible');
+        await h.move(clickPoint(box, h.rng));
+      },
+    },
+
     async reach(target: ReachTarget): Promise<void> {
       const affordance = await findReachAffordance(page, target);
       if (affordance) {
         await humanPause();
-        await affordance.click();
+        const h = await getHuman();
+        if (h) await h.click(locatorTarget(affordance));
+        else await affordance.click();
         await humanPause();
         return;
       }
