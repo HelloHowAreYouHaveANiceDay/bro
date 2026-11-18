@@ -1,4 +1,4 @@
-import type { Page, BrowserContext, Download } from 'playwright';
+import type { Page, BrowserContext, Download, Locator } from 'playwright';
 
 export type SaveStatus = 'saved' | 'reused';
 
@@ -93,6 +93,17 @@ export interface ReachTarget {
   url?: string;
 }
 
+/** What ctx.human exposes. A target is a CSS selector or a Playwright Locator. */
+export interface HumanApi {
+  click(target: string | Locator): Promise<void>;
+  /** types into the focused element, key by key; `typos` adds rare typo+Backspace (never for passwords) */
+  type(text: string, opts?: { typos?: boolean }): Promise<void>;
+  /** wheel-scroll until the target is in view */
+  scroll(target: string | Locator): Promise<void>;
+  /** move the pointer to a point, or to a random spot inside the target */
+  move(target: string | Locator | { x: number; y: number }): Promise<void>;
+}
+
 /** Injected into a workflow's run(). The page is ALREADY authenticated. */
 export interface WorkflowContext {
   page: Page;
@@ -101,6 +112,8 @@ export interface WorkflowContext {
   params: Record<string, string>;
   /** Reach an in-app destination by preferring a real click over a bare goto when possible. */
   reach(target: ReachTarget): Promise<void>;
+  /** Human-like input (curved mouse paths, per-key typing, wheel scrolling). Targets are a CSS selector or a Playwright Locator. */
+  human: HumanApi;
   /** Stage a Playwright download to the sink under a deterministic name. Returns the entry.
    * `opts` may be a bare invoiceId string, or { invoiceId, source } to file under a per-account source. */
   save(download: Download, name: string, opts?: string | SaveOptions): Promise<DownloadedFile>;

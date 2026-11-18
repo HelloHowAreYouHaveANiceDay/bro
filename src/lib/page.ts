@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import { BroError } from './errors.ts';
 import { getSession, probeCDP, type LiveSession } from './sessions.ts';
+import { Human, type Box, type HumanOpts, type HumanTarget } from './human.ts';
 
 /**
  * Page-level CDP verbs for a LIVE session (`bro page <site> ...`, `bro open <url>`).
@@ -219,7 +220,43 @@ const CENTER_JS = (selector: string) => `(() => {
   return {x: r.left + r.width / 2, y: r.top + r.height / 2};
 })()`;
 
-export async function clickSelector(cdp: PageCDP, selector: string): Promise<void> {
+/** Box (viewport coords) of the first VISIBLE element matching `selector`, without scrolling; null if none. */
+const BOX_JS = (selector: string) => `(() => {
+  const els = [...document.querySelectorAll(${JSON.stringify(selector)})];
+  const el = els.find(e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; });
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: r.left, y: r.top, width: r.width, height: r.height};
+})()`;
+const SCROLL_JS = (selector: string) => `(() => {
+  const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+  if (el) el.scrollIntoView({block: 'center', inline: 'center'});
+  return null;
+})()`;
+
+export function selectorTarget(cdp: PageCDP, selector: string): HumanTarget {
+  return {
+    box: async () => (await cdp.evaluate(BOX_JS(selector))) as Box | null,
+    scrollIntoView: async () => {
+      await cdp.evaluate(SCROLL_JS(selector));
+    },
+  };
+}
+
+export interface InputOpts extends HumanOpts {
+  /** old fast behaviour: teleport + back-to-back events, no human timing */
+  raw?: boolean;
+  /** type: rare typo+Backspace (never use on password-like fields) */
+  typos?: boolean;
+}
+
+export async function clickSelector(cdp: PageCDP, selector: string, opts: InputOpts = {}): Promise<void> {
+  if (!opts.raw) {
+    const target = selectorTarget(cdp, selector);
+    if (!(await target.box())) throw new BroError('not-found', `no visible element matches ${selector}`);
+    await new Human(cdp, opts).click(target);
+    return;
+  }
   const pt = (await cdp.evaluate(CENTER_JS(selector))) as { x: number; y: number } | null;
   if (!pt) throw new BroError('not-found', `no visible element matches ${selector}`);
   await sleep(80);
@@ -228,8 +265,12 @@ export async function clickSelector(cdp: PageCDP, selector: string): Promise<voi
   }
 }
 
-export async function typeText(cdp: PageCDP, text: string): Promise<void> {
-  await cdp.send('Input.insertText', { text });
+export async function typeText(cdp: PageCDP, text: string, opts: InputOpts = {}): Promise<void> {
+  if (opts.raw) {
+    await cdp.send('Input.insertText', { text });
+    return;
+  }
+  await new Human(cdp, opts).type(text, { typos: opts.typos });
 }
 
 const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
@@ -241,24 +282,80 @@ const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
   ArrowUp: { code: 'ArrowUp', vk: 38 },
 };
 
-export async function pressKey(cdp: PageCDP, key: string): Promise<void> {
+export async function pressKey(cdp: PageCDP, key: string, opts: InputOpts = {}): Promise<void> {
   const k = KEYS[key];
   if (!k) throw new BroError('bad-args', `unsupported key "${key}"`, { hint: `keys: ${Object.keys(KEYS).join(', ')}` });
+  if (!opts.raw) {
+    await new Human(cdp, opts).press(key);
+    return;
+  }
   const base = { key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...(k.text ? { text: k.text } : {}) });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 
-export async function gotoUrl(cdp: PageCDP, url: string, waitMs: number): Promise<string> {
+/** Visible, same-tab anchor whose resolved href equals `target` (hash and trailing slash ignored). */
+const NORM_JS = `const norm = (u) => { try { const x = new URL(u, location.href); x.hash = ''; return x.origin + x.pathname.replace(/\\/+$/, '') + x.search; } catch { return null; } };`;
+const LINK_JS = (target: string) => `(() => {
+  ${NORM_JS}
+  const want = norm(${JSON.stringify(target)});
+  if (!want) return null;
+  const el = [...document.querySelectorAll('a[href]')].find(a => {
+    const r = a.getBoundingClientRect(); const s = getComputedStyle(a);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && (!a.target || a.target === '_self') && norm(a.href) === want;
+  });
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: r.left, y: r.top, width: r.width, height: r.height};
+})()`;
+const LINK_SCROLL_JS = (target: string) => `(() => {
+  ${NORM_JS}
+  const want = norm(${JSON.stringify(target)});
+  const el = [...document.querySelectorAll('a[href]')].find(a => norm(a.href) === want);
+  if (el) el.scrollIntoView({block: 'center', inline: 'center'});
+  return null;
+})()`;
+
+export interface GotoResult {
+  url: string;
+  via: 'click' | 'navigate';
+}
+
+/**
+ * Default goto: when the page already carries a visible same-origin link to `url`, click it like a
+ * person would (real Referer / click trail); otherwise, or with `raw`, bare `Page.navigate`.
+ * Reports which path ran.
+ */
+export async function gotoUrl(cdp: PageCDP, url: string, waitMs: number, opts: InputOpts = {}): Promise<GotoResult> {
   await cdp.send('Page.enable');
   const loaded = new Promise<void>((resolve) => {
     cdp.on((method) => {
       if (method === 'Page.loadEventFired') resolve();
     });
   });
+  if (!opts.raw) {
+    const here = String(await cdp.evaluate('location.href'));
+    let sameOrigin = false;
+    try {
+      sameOrigin = new URL(url, here).origin === new URL(here).origin;
+    } catch {
+      /* not comparable: navigate */
+    }
+    const target: HumanTarget = {
+      box: async () => (await cdp.evaluate(LINK_JS(url))) as Box | null,
+      scrollIntoView: async () => {
+        await cdp.evaluate(LINK_SCROLL_JS(url));
+      },
+    };
+    if (sameOrigin && (await target.box())) {
+      await new Human(cdp, opts).click(target);
+      await Promise.race([loaded, sleep(waitMs)]);
+      return { url: String(await cdp.evaluate('location.href')), via: 'click' };
+    }
+  }
   await cdp.send('Page.navigate', { url });
   await Promise.race([loaded, sleep(waitMs)]);
-  return String(await cdp.evaluate('location.href'));
+  return { url: String(await cdp.evaluate('location.href')), via: 'navigate' };
 }
 
 export async function screenshot(cdp: PageCDP, out: string, fullPage = false): Promise<{ path: string; bytes: number }> {

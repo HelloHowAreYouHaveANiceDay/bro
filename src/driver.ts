@@ -99,6 +99,8 @@ export function describeDoc(): Record<string, unknown> {
           { name: 'reload', type: 'bool', help: 'capture: reload the page to trigger requests' },
           { name: 'full', type: 'bool', help: 'shot: full page' },
           { name: 'out', type: 'path', help: 'capture: write responses to this file' },
+          { name: 'raw', type: 'bool', help: 'click/type/key/goto: old fast input (no human pointer/keyboard timing; goto = bare navigate)' },
+          { name: 'typos', type: 'bool', help: 'type: occasional typo+Backspace (not for passwords)' },
         ],
         output: 'json',
         effect: 'mutate',

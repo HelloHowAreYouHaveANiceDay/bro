@@ -43,6 +43,16 @@ bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
   API data an in-page fetch replay can't get without the app's auth headers), `close`. Pick the tab
   with `--tab <id|id-prefix|url-substring>`; without it bro uses the single tab on the site's own
   domain and refuses (listing candidates) when that is ambiguous.
+- Input is human-like by default: `click` moves along a curved, eased mouse path to a random point
+  inside the element (scrolling with wheel events first), `type` sends per-key keyDown/keyUp with
+  human timing (`--typos` adds rare typo+Backspace; never use it on passwords), `key` presses with a
+  real hold. `--raw` on `click|type|key|goto` restores the old fast behaviour (teleport click,
+  `insertText`, bare navigate).
+- `goto <url>` first looks for a visible same-origin link to the target and clicks it like a person;
+  only when none exists (or with `--raw`) does it bare-navigate. The JSON reply says which:
+  `via: "click"` or `via: "navigate"`.
+- Workflows get the same layer as `ctx.human.{click,type,scroll,move}` (selector or Locator
+  targets); `ctx.reach` clicks through it when the page has a CDP session.
 - Page verbs talk raw CDP and never close or take over the human's session. Same read-only rule as
   workflows in financial accounts: navigate and read; never click pay/transfer/cancel controls.
 - `bro session list` reports `stale (host gone)` when a row's host pid is dead, even if some other

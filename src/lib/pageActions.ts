@@ -16,7 +16,7 @@ import {
 export const PAGE_ACTIONS = ['tabs', 'text', 'eval', 'goto', 'click', 'type', 'key', 'shot', 'capture', 'close'] as const;
 
 export const PAGE_USAGE =
-  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] | click <css> | type <text> | key <Key> | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | close  [--tab <id|url-substr>]';
+  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] [--raw] | click <css> [--raw] | type <text> [--raw] [--typos] | key <Key> [--raw] | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | close  [--tab <id|url-substr>]';
 
 export interface PageOpts {
   tab?: string;
@@ -25,6 +25,10 @@ export interface PageOpts {
   reload?: boolean;
   full?: boolean;
   out?: string;
+  /** click/type/key/goto: old fast behaviour (no human pointer/keyboard timing; goto = bare navigate) */
+  raw?: boolean;
+  /** type: rare typo+Backspace (never for passwords) */
+  typos?: boolean;
 }
 
 export async function openUrl(url: string, siteId = 'scratch'): Promise<Record<string, unknown>> {
@@ -74,24 +78,24 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         result = { value: await cdp.evaluate(need('js expression')) };
         break;
       case 'goto':
-        result = { url: await gotoUrl(cdp, need('url'), wait || 15000) };
+        result = { ...(await gotoUrl(cdp, need('url'), wait || 15000, { raw: opts.raw })) };
         break;
       case 'click': {
         const sel = need('css selector');
-        await clickSelector(cdp, sel);
+        await clickSelector(cdp, sel, { raw: opts.raw });
         if (wait) await new Promise((r) => setTimeout(r, wait));
         result = { clicked: sel, url: await cdp.evaluate('location.href') };
         break;
       }
       case 'type': {
         if (arg === undefined) throw new BroError('bad-args', 'usage: bro page <site> type <text>  (types into the focused element; click it first)');
-        await typeText(cdp, arg);
+        await typeText(cdp, arg, { raw: opts.raw, typos: opts.typos });
         result = { typed: arg.length };
         break;
       }
       case 'key': {
         const k = need('Enter|Tab|Escape|...');
-        await pressKey(cdp, k);
+        await pressKey(cdp, k, { raw: opts.raw });
         result = { key: k };
         break;
       }

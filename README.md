@@ -38,7 +38,7 @@ npx tsx src/cli.ts workflow run cloudflare-stg invoices --month 2026-06
 | `session launch\|quit <site>` | open/close a long-lived logged-in browser session (banks) | launch = **yes** |
 | `session list` | list live sessions | no |
 | `page open <url>` | open a URL in the scratch browser | no |
-| `page exec <site> <action>` | drive a live session tab | no |
+| `page exec <site> <action>` | drive a live session tab (human-like input by default; `--raw` for fast; `goto` reports `via: click\|navigate`) | no |
 | `record <site> <wf>` | optional: demo a task to seed a workflow | yes |
 | `new <site> <wf> --kind <k>` | scaffold a typed workflow skeleton | no |
 | `workflow run <site> <wf> --dry-run` | dry-run (no files shipped) + failure artifacts | no |

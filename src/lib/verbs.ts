@@ -21,6 +21,8 @@ export function pageOptsFromParams(params: Record<string, unknown>): PageOpts {
     reload: params.reload === true || params.reload === 'true',
     full: params.full === true || params.full === 'true',
     out: params.out ? String(params.out) : undefined,
+    ...(params.raw === true || params.raw === 'true' ? { raw: true } : {}),
+    ...(params.typos === true || params.typos === 'true' ? { typos: true } : {}),
   };
 }
 
