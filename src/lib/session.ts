@@ -80,7 +80,7 @@ export async function openSession(
   if (site.browser === 'persistent') {
     const dir = profileDir(site.id);
     fs.mkdirSync(dir, { recursive: true });
-    const context = await chromium.launchPersistentContext(dir, {
+    const context = await chromium.launchPersistentContext(dir, { chromiumSandbox: true,
       channel: opts.channel,
       headless: false, // persistent + headless defeats the purpose and is itself detectable
       acceptDownloads: true,
@@ -92,7 +92,7 @@ export async function openSession(
 
   // Public sites have no stored credentials -- launch a fresh context with no storageState.
   if (site.public) {
-    const browser = await chromium.launch({
+    const browser = await chromium.launch({ chromiumSandbox: true,
       channel: opts.channel,
       headless: !(opts.headed || site.headed),
       args: ['--disable-blink-features=AutomationControlled'],
@@ -107,7 +107,7 @@ export async function openSession(
   const statePath = authPath(site.id);
   if (!fs.existsSync(statePath)) throw authExpired(site.id);
 
-  const browser = await chromium.launch({
+  const browser = await chromium.launch({ chromiumSandbox: true,
     channel: opts.channel,
     headless: !(opts.headed || site.headed),
     // suppress the loudest automation signal so bot-detection (e.g. Cloudflare) doesn't challenge/block
@@ -173,7 +173,7 @@ export async function startPersistentSession(
   const dir = profileDir(site.id);
   fs.mkdirSync(dir, { recursive: true });
   const port = await pickPort();
-  const context = await chromium.launchPersistentContext(dir, {
+  const context = await chromium.launchPersistentContext(dir, { chromiumSandbox: true,
     channel: opts.channel,
     headless: false,
     acceptDownloads: true,

@@ -21,7 +21,7 @@ function randomWindowSizeArg(): string {
 export async function authCapture(site: SiteConfig, channel: string, stampIso: string): Promise<void> {
   if (site.browser === 'persistent') return authCapturePersistent(site, channel, stampIso);
 
-  const browser = await chromium.launch({
+  const browser = await chromium.launch({ chromiumSandbox: true,
     channel,
     headless: false,
     args: ['--disable-blink-features=AutomationControlled', randomWindowSizeArg()],
@@ -112,7 +112,7 @@ export async function authCapture(site: SiteConfig, channel: string, stampIso: s
 async function authCapturePersistent(site: SiteConfig, channel: string, stampIso: string): Promise<void> {
   const dir = profileDir(site.id);
   fs.mkdirSync(dir, { recursive: true });
-  const context = await chromium.launchPersistentContext(dir, {
+  const context = await chromium.launchPersistentContext(dir, { chromiumSandbox: true,
     channel,
     headless: false,
     viewport: null,

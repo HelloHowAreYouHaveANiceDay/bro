@@ -187,7 +187,7 @@ export function buildContext(args: {
       // a raw goto to the final URL can land on an error page), then print and discard
       // the clone. Never touches the live page/context.
       const storageState = await context.storageState();
-      const clone = await chromium.launch({ channel: browserChannel, headless: true });
+      const clone = await chromium.launch({ chromiumSandbox: true, channel: browserChannel, headless: true });
       try {
         const cloneContext = await clone.newContext({ storageState });
         const clonePage = await cloneContext.newPage();
