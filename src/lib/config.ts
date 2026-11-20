@@ -44,6 +44,6 @@ export function loadConfig(): BroConfig {
     localRoot:
       process.env.BRO_LOCAL_ROOT || 'H:/working/assistant/shared_accounting_data',
     driveRawFolder: process.env.ASSIST_RAW_DRIVE_FOLDER || '1XfX3erYCdbwNUqnFBhIeUUNjNvhGFAAj',
-    browserChannel: process.env.BRO_BROWSER_CHANNEL || 'msedge',
+    browserChannel: process.env.BRO_BROWSER_CHANNEL || (process.platform === 'win32' ? 'msedge' : 'chromium'),
   };
 }

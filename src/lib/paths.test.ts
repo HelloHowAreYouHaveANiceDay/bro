@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveMonth, sanitizeFilename, accountingRelPath } from './paths.ts';
@@ -64,9 +64,9 @@ describe('sitesDir discovery cache', () => {
     origBroSitesDir = process.env.BRO_SITES_DIR;
     delete process.env.BRO_SITES_DIR;
 
-    dataDir = mkdtempSync(join(tmpdir(), 'bro-test-data-'));
-    sitesRoot = mkdtempSync(join(tmpdir(), 'bro-test-sites-'));
-    cwdDir = mkdtempSync(join(tmpdir(), 'bro-test-cwd-'));
+    dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-data-')));
+    sitesRoot = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-sites-')));
+    cwdDir = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-cwd-')));
 
     // One configured site + the _example template
     const siteJson = JSON.stringify({ name: 'test', loginUrl: 'https://x', homeUrl: 'https://x', source: 'x' });
@@ -109,8 +109,8 @@ describe('sitesDir discovery cache', () => {
 
   it('auto-writes sites-dir cache when discovering sites from cwd, then finds them from a different cwd', () => {
     // Simulate running from the checkout: cwd contains sites/
-    const checkoutDir = mkdtempSync(join(tmpdir(), 'bro-test-checkout-'));
-    const checkoutData = mkdtempSync(join(tmpdir(), 'bro-test-checkout-data-'));
+    const checkoutDir = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-checkout-')));
+    const checkoutData = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-checkout-data-')));
     try {
       const siteJson = JSON.stringify({ name: 'cs', loginUrl: 'https://x', homeUrl: 'https://x', source: 'x' });
       mkdirSync(join(checkoutDir, 'sites', 'checkoutsite'), { recursive: true });
@@ -141,7 +141,7 @@ describe('sitesDir discovery cache', () => {
   // overwrote the user's sites-dir cache; the worktree was then removed, so every SEA call (`bim bro run espn
   // ...`) fell back to <dataRoot>/sites and failed with no-such-site.
   it('a linked git worktree (.git is a file) uses its own sites/ but never writes the cache', () => {
-    const wt = mkdtempSync(join(tmpdir(), 'bro-test-wt-'));
+    const wt = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-wt-')));
     try {
       mkdirSync(join(wt, 'sites', 'wtsite'), { recursive: true });
       writeFileSync(join(wt, 'sites', 'wtsite', 'site.json'), JSON.stringify({ name: 'w', loginUrl: 'https://x', homeUrl: 'https://x', source: 'x' }));
@@ -162,7 +162,7 @@ describe('sitesDir discovery cache', () => {
   });
 
   it('a second checkout never replaces a cached sites path that still exists', () => {
-    const other = mkdtempSync(join(tmpdir(), 'bro-test-other-'));
+    const other = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-other-')));
     try {
       mkdirSync(join(other, 'sites', '_example'), { recursive: true });
       writeFileSync(join(dataDir, 'sites-dir'), sitesRoot, 'utf8');
@@ -177,7 +177,7 @@ describe('sitesDir discovery cache', () => {
   });
 
   it('a checkout replaces a cached path that no longer exists', () => {
-    const co = mkdtempSync(join(tmpdir(), 'bro-test-co-'));
+    const co = realpathSync(mkdtempSync(join(tmpdir(), 'bro-test-co-')));
     try {
       mkdirSync(join(co, 'sites', 'cosite'), { recursive: true });
       writeFileSync(join(dataDir, 'sites-dir'), join(tmpdir(), 'bro-test-gone-xyz', 'sites'), 'utf8');

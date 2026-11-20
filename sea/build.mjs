@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const seaDir = path.join(root, 'sea');
 const bundle = path.join(seaDir, 'driver.bundle.cjs');
-const outExe = path.join(root, 'bim-bro.exe');
+const isMac = process.platform === 'darwin';
+const outExe = path.join(root, process.platform === 'win32' ? 'bim-bro.exe' : 'bim-bro');
 const FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 // 1. Bundle the entry + all of bro's src + sucrase into one CJS file. playwright stays external.
@@ -55,10 +56,19 @@ execFileSync(process.execPath, ['--experimental-sea-config', cfg], { stdio: 'inh
 
 // 3. Copy the node runtime, inject the blob.
 fs.copyFileSync(process.execPath, outExe);
+fs.chmodSync(outExe, 0o755);
+// macOS: the copied node binary carries Node's signature; strip it before injecting, put the blob in
+// the NODE_SEA Mach-O segment, then ad-hoc re-sign (arm64 refuses to run unsigned code).
+if (isMac) execFileSync('codesign', ['--remove-signature', outExe], { stdio: 'inherit' });
 execFileSync(
   'npx',
-  ['--yes', 'postject', outExe, 'NODE_SEA_BLOB', path.join(seaDir, 'sea-prep.blob'), '--sentinel-fuse', FUSE],
-  { stdio: 'inherit', shell: true },
+  [
+    '--yes', 'postject', outExe, 'NODE_SEA_BLOB', path.join(seaDir, 'sea-prep.blob'),
+    '--sentinel-fuse', FUSE,
+    ...(isMac ? ['--macho-segment-name', 'NODE_SEA'] : []),
+  ],
+  { stdio: 'inherit', shell: process.platform === 'win32' },
 );
+if (isMac) execFileSync('codesign', ['--sign', '-', '--force', outExe], { stdio: 'inherit' });
 
 console.error(`\nbuilt ${outExe} (${(fs.statSync(outExe).size / 1e6).toFixed(1)} MB) — standalone (playwright provisioned separately)`);
