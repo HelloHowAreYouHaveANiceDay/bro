@@ -34,7 +34,21 @@ export function pageOptsFromParams(params: Record<string, unknown>): PageOpts {
   };
 }
 
+/** Old verb name -> the canonical spaced name that replaced it (describe alias rows + deprecation text). */
+export const LEGACY_VERBS: Record<string, string> = {
+  list: 'site list', sessions: 'session list', open: 'page open', page: 'page exec',
+  run: 'workflow run', test: 'workflow run --dry-run', 'run-all': 'workflow run-all', auth: 'auth login',
+  session: 'session launch|quit',
+};
+
+/** One stderr line per old-name invocation (stdout stays the JSON envelope). */
+export function warnLegacyVerb(old: string): void {
+  const next = LEGACY_VERBS[old];
+  if (next) process.stderr.write(`bro: \`${old}\` is deprecated, use \`${next}\`\n`);
+}
+
 export function canonicalMethod(method: string, params: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
+  if (Object.prototype.hasOwnProperty.call(LEGACY_VERBS, method)) warnLegacyVerb(method);
   const aliases: Record<string, string> = {
     list: 'site.list', sessions: 'session.list', open: 'page.open', page: 'page.exec',
     run: 'workflow.run', test: 'workflow.run', 'run-all': 'workflow.run-all', auth: 'auth.login',

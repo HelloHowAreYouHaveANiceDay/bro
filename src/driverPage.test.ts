@@ -3,7 +3,7 @@ import { describeDoc } from './driver.ts';
 import { pageAction, PAGE_ACTIONS } from './lib/pageActions.ts';
 
 describe('driver describe: page verbs', () => {
-  const verbs = (describeDoc().verbs as Array<{ name: string; args: Array<{ name: string }> }>);
+  const verbs = (describeDoc().verbs as Array<{ name: string; is_alias?: boolean; args: Array<{ name: string }> }>).filter((v) => v.is_alias !== true);
   const byName = Object.fromEntries(verbs.map((v) => [v.name, v]));
 
   it('exposes open and page so `bim bro open|page` route to the driver', () => {
@@ -16,7 +16,7 @@ describe('driver describe: page verbs', () => {
   });
 
   it('reports the bumped version', () => {
-    expect(describeDoc().version).toBe('0.4.0');
+    expect(describeDoc().version).toBe('0.4.1');
   });
 });
 

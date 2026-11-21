@@ -16,11 +16,11 @@ import tty from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
 import { BroError } from './lib/errors.ts';
-import { canonicalMethod, pageOptsFromParams, resolveDateStamp } from './lib/verbs.ts';
+import { LEGACY_VERBS, canonicalMethod, pageOptsFromParams, resolveDateStamp } from './lib/verbs.ts';
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -39,7 +39,33 @@ const codeFor = (kind: string): number => KIND_CODE[kind] ?? -32099;
 // bro kinds -> the bim-cli kind the dispatcher expects (auth intercept keys on `auth_required`).
 const NORMALIZE_KIND: Record<string, string> = { 'auth-expired': 'auth_required' };
 
+/** Alias rows for the pre-0.3.0 verb names (bim-cli pins verb names forever: a rename needs a describe alias). */
+function legacyAliasRows(verbs: Array<Record<string, any>>): Array<Record<string, unknown>> {
+  const target: Record<string, string> = {
+    list: 'site list', sessions: 'session list', open: 'page open', page: 'page exec',
+    run: 'workflow run', test: 'workflow run', 'run-all': 'workflow run-all', auth: 'auth login',
+    session: 'session launch',
+  };
+  return Object.keys(LEGACY_VERBS).map((old) => {
+    const base = verbs.find((v) => v.name === target[old])!;
+    const extra = old === 'session' ? [{ name: 'op', type: 'string', required: true, positional: true, help: 'start|stop (legacy; now session launch|quit)' }] : [];
+    return {
+      ...base,
+      name: old,
+      description: `DEPRECATED alias of \`${LEGACY_VERBS[old]}\``,
+      is_alias: true,
+      dispatches_to: target[old],
+      args: [...extra, ...(base.args ?? [])],
+    };
+  });
+}
+
 export function describeDoc(): Record<string, unknown> {
+  const doc = describeDocBase();
+  return { ...doc, verbs: [...(doc.verbs as any[]), ...legacyAliasRows(doc.verbs as any[])] };
+}
+
+function describeDocBase(): Record<string, unknown> {
   return {
     name: 'bro',
     version: VERSION,

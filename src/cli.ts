@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import fs from 'node:fs';
 import { BroError } from './lib/errors.ts';
-import { parseCliVerb } from './lib/verbs.ts';
+import { LEGACY_VERBS, parseCliVerb, warnLegacyVerb } from './lib/verbs.ts';
 import { loadConfig } from './lib/config.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 import { authMetaPath, authPath, profileDir } from './lib/paths.ts';
@@ -82,6 +82,7 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
   const parsed = parseCliVerb(args._);
+  { const f = args._[0] ?? ''; const g = args._[1] ?? ''; const modern = ({ session: ['list', 'launch', 'quit'], page: ['open', 'exec'], auth: ['login'] } as Record<string, string[]>)[f]; if (Object.prototype.hasOwnProperty.call(LEGACY_VERBS, f) && !modern?.includes(g)) warnLegacyVerb(f); }
   const verb = parsed.verb;
   const [a, b, pageArg] = parsed.rest;
   const dryRun = args.dryRun || parsed.dryRun;
