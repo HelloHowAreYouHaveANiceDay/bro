@@ -299,6 +299,8 @@ async function main(): Promise<number> {
         reload: args.reload,
         full: args.full,
         out: args.params['out'],
+        click: args.params['click'],
+        files: parsed.rest.slice(3),
       });
       emit(args, true, r);
       if (!args.json) {
@@ -344,7 +346,7 @@ function capabilityDoc(): Record<string, unknown> {
       { name: 'page open', args: '<url> [--site <id>]  (default site: built-in scratch, started detached on demand)', interactive: false },
       {
         name: 'page exec',
-        args: '<site> tabs|text|eval <js>|goto <url>|click <css>|type <text>|key <Key>|shot <png>|capture <url-substr>|close [--tab <id|url-substr>] [--wait ms] [--reload] [--out file] [--full] [--max N]',
+        args: '<site> tabs|text|eval <js>|goto <url>|click <css>|type <text>|key <Key>|shot <png>|capture <url-substr>|upload <input-css> <file...>|upload --click <button-css> <file...>|close [--tab <id|url-substr>] [--wait ms] [--reload] [--out file] [--full] [--max N]',
         interactive: false,
       },
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },
