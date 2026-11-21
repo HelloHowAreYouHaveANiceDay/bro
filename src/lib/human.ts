@@ -220,6 +220,15 @@ function neighborKey(ch: string, rng: Rng): string | null {
 
 const MOD_SHIFT = 8;
 
+/** Max total sleep for one `type` call (about 1.5 s per field, however long the value). */
+export const TYPE_BUDGET_MS = 1500;
+/** Typical wall time per key (inter-key gap + press). */
+const TYPE_MS_PER_CHAR = 190;
+/** Below this speed-up factor (~28 ms/key) per-key typing is pointless: paste in chunks instead. */
+const TYPE_MIN_SCALE = 0.15;
+const TYPE_CHUNK_MIN = 40;
+const TYPE_MAX_CHUNKS = 20;
+
 // ---------- the actor ----------
 
 const cursors = new WeakMap<object, Point>();
@@ -238,24 +247,19 @@ export class Human {
     return { w: Number(v?.w) > 0 ? Number(v!.w) : 1280, h: Number(v?.h) > 0 ? Number(v!.h) : 720 };
   }
 
-  /** Last pointer position for this page; first use picks a plausible in-viewport point (or the one a previous bro process left in the page). */
+  /** Last pointer position for this page; first use picks a plausible in-viewport point . */
   async cursor(): Promise<Point> {
     const known = cursors.get(this.page);
     if (known) return known;
-    const saved = (await this.page.evaluate('window.__broCursor || null').catch(() => null)) as Point | null;
-    let p: Point;
-    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) p = { x: saved.x, y: saved.y };
-    else {
-      const vp = await this.viewport();
-      p = { x: vp.w * (0.3 + this.rng() * 0.4), y: vp.h * (0.3 + this.rng() * 0.4) };
-    }
+    const vp = await this.viewport();
+    const p: Point = { x: vp.w * (0.3 + this.rng() * 0.4), y: vp.h * (0.3 + this.rng() * 0.4) };
     cursors.set(this.page, p);
     return p;
   }
 
+  /** Pointer position lives only in this process (WeakMap); nothing is written into the page. */
   private async remember(p: Point): Promise<void> {
     cursors.set(this.page, p);
-    await this.page.evaluate(`window.__broCursor = {x: ${p.x}, y: ${p.y}}; 0`).catch(() => undefined);
   }
 
   private mouse(type: 'mouseMoved' | 'mousePressed' | 'mouseReleased' | 'mouseWheel', p: Point, extra: Record<string, unknown> = {}) {
@@ -341,24 +345,49 @@ export class Human {
   }
 
   /** Type into the focused element. `typos` (default off; never for passwords) adds rare wrong-key + Backspace fixes. */
-  async type(text: string, opts: { typos?: boolean } = {}): Promise<void> {
+  async type(text: string, opts: { typos?: boolean; maxTotalMs?: number } = {}): Promise<void> {
     const chars = [...text];
-    for (let i = 0; i < chars.length; i++) {
-      const ch = chars[i]!;
-      if (i > 0) await this.sleep(keyDelay(this.rng));
-      if (opts.typos && /[a-zA-Z]/.test(ch) && this.rng() < 0.03) {
-        const wrong = neighborKey(ch, this.rng);
-        const wk = wrong ? keyForChar(wrong) : null;
-        if (wk) {
-          await this.tap(wk);
-          await this.sleep(Math.round(150 + this.rng() * 350));
-          await this.tap({ key: 'Backspace', code: 'Backspace', vk: 8, shift: false });
-          await this.sleep(keyDelay(this.rng));
+    const budget = opts.maxTotalMs ?? TYPE_BUDGET_MS;
+    // Bounded: total sleep per call never exceeds `budget`. Short values keep full human timing,
+    // longer ones are sped up proportionally, and values too long for per-key typing are pasted in chunks.
+    const scale = Math.min(1, budget / Math.max(1, chars.length * TYPE_MS_PER_CHAR));
+    const realSleepFn = this.sleep;
+    let spent = 0;
+    const pace = (ms: number) => {
+      const d = Math.min(Math.round(ms * scale), Math.max(0, budget - spent));
+      spent += d;
+      return d > 0 ? realSleepFn(d) : Promise.resolve();
+    };
+    const saved = this.sleep;
+    this.sleep = pace;
+    try {
+      if (scale < TYPE_MIN_SCALE) {
+        const chunk = Math.max(TYPE_CHUNK_MIN, Math.ceil(chars.length / TYPE_MAX_CHUNKS));
+        for (let i = 0; i < chars.length; i += chunk) {
+          if (i > 0) await this.sleep(Math.round(40 + this.rng() * 80) / scale);
+          await this.page.send('Input.insertText', { text: chars.slice(i, i + chunk).join('') });
         }
+        return;
       }
-      const k = keyForChar(ch);
-      if (k) await this.tap(k);
-      else await this.page.send('Input.insertText', { text: ch });
+      for (let i = 0; i < chars.length; i++) {
+        const ch = chars[i]!;
+        if (i > 0) await this.sleep(keyDelay(this.rng));
+        if (opts.typos && /[a-zA-Z]/.test(ch) && this.rng() < 0.03) {
+          const wrong = neighborKey(ch, this.rng);
+          const wk = wrong ? keyForChar(wrong) : null;
+          if (wk) {
+            await this.tap(wk);
+            await this.sleep(Math.round(150 + this.rng() * 350));
+            await this.tap({ key: 'Backspace', code: 'Backspace', vk: 8, shift: false });
+            await this.sleep(keyDelay(this.rng));
+          }
+        }
+        const k = keyForChar(ch);
+        if (k) await this.tap(k);
+        else await this.page.send('Input.insertText', { text: ch });
+      }
+    } finally {
+      this.sleep = saved;
     }
   }
 
@@ -380,4 +409,12 @@ export function seededRng(seed: number): Rng {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+let rawWarned = false;
+/** `--raw` was renamed `--yolo`; the old spelling still works but warns once on stderr. */
+export function warnRawDeprecated(): void {
+  if (rawWarned) return;
+  rawWarned = true;
+  process.stderr.write('bro: --raw is deprecated, use --yolo (same behaviour: skip the human input layer)\n');
 }

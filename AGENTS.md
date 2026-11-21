@@ -43,13 +43,18 @@ bro is the agent's only browser, so it covers ad-hoc pages as well as workflows:
   API data an in-page fetch replay can't get without the app's auth headers), `close`. Pick the tab
   with `--tab <id|id-prefix|url-substring>`; without it bro uses the single tab on the site's own
   domain and refuses (listing candidates) when that is ambiguous.
-- Input is human-like by default: `click` moves along a curved, eased mouse path to a random point
-  inside the element (scrolling with wheel events first), `type` sends per-key keyDown/keyUp with
-  human timing (`--typos` adds rare typo+Backspace; never use it on passwords), `key` presses with a
-  real hold. `--raw` on `click|type|key|goto` restores the old fast behaviour (teleport click,
-  `insertText`, bare navigate).
-- `goto <url>` first looks for a visible same-origin link to the target and clicks it like a person;
-  only when none exists (or with `--raw`) does it bare-navigate. The JSON reply says which:
+- Input is human-like by default (opt out per call with `--yolo`; `--raw` is a deprecated alias that
+  warns on stderr): `click` moves along a curved, eased mouse path to a random point inside the
+  element (scrolling with wheel events first), `type` sends per-key keyDown/keyUp with human timing,
+  `key` presses with a real hold. `type` is bounded: about 1.5 s total per field; longer values are
+  sped up, and very long or pasted values go in as a few `insertText` chunks. `--typos` adds rare
+  typo+Backspace (never on passwords). `--yolo` on `click|type|key|goto|upload --click` restores the
+  old fast behaviour (teleport click, one `insertText`, bare navigate). Nothing is written into the
+  page's JS globals.
+- `goto <url>` clicks a link only when a visible same-origin, same-tab `<a href>` whose href EXACTLY
+  matches the target exists, has no onclick handler or `download`, and is not inside a `<form>`.
+  Otherwise (or with `--yolo`) it navigates directly. After a click it waits at most about 3 s for a
+  load or URL change, then falls back to direct navigation. The JSON reply says which:
   `via: "click"` or `via: "navigate"`.
 - Workflows get the same layer as `ctx.human.{click,type,scroll,move}` (selector or Locator
   targets); `ctx.reach` clicks through it when the page has a CDP session.

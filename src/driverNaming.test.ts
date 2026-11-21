@@ -33,7 +33,7 @@ describe('driver verb naming', () => {
     expect(byName['workflow run-all']?.supports_dry_run).toBe(true);
     expect(byName['page exec']?.args.map((arg) => [arg.name, arg.type])).toEqual([
       ['site', 'string'], ['action', 'string'], ['arg', 'string'], ['tab', 'string'], ['wait', 'int'], ['max', 'int'],
-      ['reload', 'bool'], ['full', 'bool'], ['out', 'path'], ['raw', 'bool'], ['typos', 'bool'],
+      ['reload', 'bool'], ['full', 'bool'], ['out', 'path'], ['files', 'string'], ['click', 'string'], ['yolo', 'bool'], ['typos', 'bool'], ['raw', 'bool'],
     ]);
     expect(Object.fromEntries(verbs.map((verb) => [verb.name, verb.effect]))).toEqual({
       doctor: 'read', version: 'read', 'site list': 'read', 'session list': 'read', 'session launch': 'mutate',

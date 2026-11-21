@@ -204,10 +204,10 @@ describe('Human against a fake page', () => {
   it('typos are off by default and fix themselves with Backspace when on', async () => {
     const text = 'the quick brown fox jumps over the lazy dog '.repeat(10);
     const off = fakePage();
-    await new Human(off.page, { rng: seededRng(8), sleep: async () => {} }).type(text);
+    await new Human(off.page, { rng: seededRng(8), sleep: async () => {} }).type(text, { maxTotalMs: 1e9 });
     expect(off.calls.some((c) => c.params['key'] === 'Backspace')).toBe(false);
     const on = fakePage();
-    await new Human(on.page, { rng: seededRng(8), sleep: async () => {} }).type(text, { typos: true });
+    await new Human(on.page, { rng: seededRng(8), sleep: async () => {} }).type(text, { typos: true, maxTotalMs: 1e9 });
     expect(on.calls.some((c) => c.params['key'] === 'Backspace')).toBe(true);
   });
 });
@@ -241,7 +241,7 @@ describe('page verbs over CDP (fake target)', () => {
     return evalResult(null);
   };
 
-  it('click emits >10 mouseMoved before press; --raw keeps the 3-event teleport', async () => {
+  it('click emits >10 mouseMoved before press; --yolo keeps the 3-event teleport', async () => {
     await withServer(handler, async (cdp, log) => {
       await clickSelector(cdp, 'a', { rng: seededRng(1), sleep: async () => {} });
       const types = log.filter((l) => l.method === 'Input.dispatchMouseEvent').map((l) => l.params['type']);
@@ -250,12 +250,12 @@ describe('page verbs over CDP (fake target)', () => {
       expect(types.slice(-2)).toEqual(['mousePressed', 'mouseReleased']);
     });
     await withServer(handler, async (cdp, log) => {
-      await clickSelector(cdp, 'a', { raw: true });
+      await clickSelector(cdp, 'a', { yolo: true });
       expect(log.filter((l) => l.method === 'Input.dispatchMouseEvent').map((l) => l.params['type'])).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased']);
     });
   });
 
-  it('type emits keyDown/keyUp pairs, not insertText; --raw still uses insertText', async () => {
+  it('type emits keyDown/keyUp pairs, not insertText; --yolo still uses insertText', async () => {
     await withServer(handler, async (cdp, log) => {
       await typeText(cdp, 'Hi 5', { rng: seededRng(2), sleep: async () => {} });
       const kinds = log.map((l) => l.method);
@@ -266,7 +266,7 @@ describe('page verbs over CDP (fake target)', () => {
       expect(ups).toEqual(downs);
     });
     await withServer(handler, async (cdp, log) => {
-      await typeText(cdp, 'Hi', { raw: true });
+      await typeText(cdp, 'Hi', { yolo: true });
       expect(log.map((l) => l.method)).toEqual(['Input.insertText']);
     });
   });
@@ -279,14 +279,18 @@ describe('page verbs over CDP (fake target)', () => {
     });
   });
 
-  it('goto reports via: click when a same-origin link exists, navigate otherwise or with --raw', async () => {
-    const mk = (linkBox: unknown, here = 'https://x.test/') => (method: string, params: Record<string, unknown>) => {
+  it('goto reports via: click when a same-origin link exists, navigate otherwise or with --yolo', async () => {
+    const mk = (linkBox: unknown, here0 = 'https://x.test/') => {
+      let here = here0;
+      return (method: string, params: Record<string, unknown>) => {
+      if (method === 'Input.dispatchMouseEvent' && params['type'] === 'mouseReleased') here = 'https://x.test/docs';
       if (method !== 'Runtime.evaluate') return {};
       const e = String(params['expression']);
       if (e === 'location.href') return evalResult(here);
       if (e.includes('innerWidth')) return evalResult({ w: 1000, h: 700 });
       if (e.includes("a[href]") && e.includes('return {x:')) return evalResult(linkBox);
       return evalResult(null);
+      };
     };
     await withServer(mk(BOX), async (cdp, log) => {
       const r = await gotoUrl(cdp, 'https://x.test/docs', 50, { rng: seededRng(1), sleep: async () => {} });
@@ -300,7 +304,7 @@ describe('page verbs over CDP (fake target)', () => {
       expect(log.some((l) => l.method === 'Page.navigate')).toBe(true);
     });
     await withServer(mk(BOX), async (cdp, log) => {
-      expect((await gotoUrl(cdp, 'https://x.test/docs', 50, { raw: true })).via).toBe('navigate');
+      expect((await gotoUrl(cdp, 'https://x.test/docs', 50, { yolo: true })).via).toBe('navigate');
       expect(log.some((l) => l.params['type'] === 'mousePressed')).toBe(false);
     });
     await withServer(mk(BOX), async (cdp) => {

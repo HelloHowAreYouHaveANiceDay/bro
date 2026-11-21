@@ -4,7 +4,7 @@ import { loadSite } from './registry.ts';
 import { startDetached, liveSession } from './detach.ts';
 import {
   resolveLive, listTabs, pickTab, PageCDP, clickSelector, typeText, pressKey, gotoUrl, screenshot,
-  captureResponses, openTab, closeTab,
+  captureResponses, openTab, closeTab, uploadFiles,
 } from './page.ts';
 
 /**
@@ -13,10 +13,10 @@ import {
  * nothing.
  */
 
-export const PAGE_ACTIONS = ['tabs', 'text', 'eval', 'goto', 'click', 'type', 'key', 'shot', 'capture', 'close'] as const;
+export const PAGE_ACTIONS = ['tabs', 'text', 'eval', 'goto', 'click', 'type', 'key', 'shot', 'capture', 'upload', 'close'] as const;
 
 export const PAGE_USAGE =
-  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] [--raw] | click <css> [--raw] | type <text> [--raw] [--typos] | key <Key> [--raw] | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | close  [--tab <id|url-substr>]';
+  'usage: bro page <site> tabs | text [--max N] | eval <js> | goto <url> [--wait ms] | click <css> | type <text> | key <Key> | shot <out.png> [--full] | capture <url-substr> [--reload] [--wait ms] [--out file] | upload <input-css> <file...> | upload --click <button-css> <file...> [--wait ms] | close  [--tab <id|url-substr>]';
 
 export interface PageOpts {
   tab?: string;
@@ -25,8 +25,12 @@ export interface PageOpts {
   reload?: boolean;
   full?: boolean;
   out?: string;
+  /** upload: extra file paths after the first positional */
+  files?: string[];
+  /** upload: click this to open the site's file chooser instead of naming the input */
+  click?: string;
   /** click/type/key/goto: old fast behaviour (no human pointer/keyboard timing; goto = bare navigate) */
-  raw?: boolean;
+  yolo?: boolean;
   /** type: rare typo+Backspace (never for passwords) */
   typos?: boolean;
 }
@@ -78,24 +82,24 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         result = { value: await cdp.evaluate(need('js expression')) };
         break;
       case 'goto':
-        result = { ...(await gotoUrl(cdp, need('url'), wait || 15000, { raw: opts.raw })) };
+        result = { ...(await gotoUrl(cdp, need('url'), wait || 15000, { yolo: opts.yolo })) };
         break;
       case 'click': {
         const sel = need('css selector');
-        await clickSelector(cdp, sel, { raw: opts.raw });
+        await clickSelector(cdp, sel, { yolo: opts.yolo });
         if (wait) await new Promise((r) => setTimeout(r, wait));
         result = { clicked: sel, url: await cdp.evaluate('location.href') };
         break;
       }
       case 'type': {
         if (arg === undefined) throw new BroError('bad-args', 'usage: bro page <site> type <text>  (types into the focused element; click it first)');
-        await typeText(cdp, arg, { raw: opts.raw, typos: opts.typos });
+        await typeText(cdp, arg, { yolo: opts.yolo, typos: opts.typos });
         result = { typed: arg.length };
         break;
       }
       case 'key': {
         const k = need('Enter|Tab|Escape|...');
-        await pressKey(cdp, k, { raw: opts.raw });
+        await pressKey(cdp, k, { yolo: opts.yolo });
         result = { key: k };
         break;
       }
@@ -107,6 +111,17 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         const rows = await captureResponses(cdp, match, { reload: !!opts.reload, waitMs: wait || 15000 });
         if (opts.out) fs.writeFileSync(opts.out, JSON.stringify(rows));
         result = { match, count: rows.length, ...(opts.out ? { out: opts.out } : { responses: rows }) };
+        break;
+      }
+      case 'upload': {
+        // `upload <input-css> <file...>` or `upload --click <button-css> <file...>` (then every positional is a file).
+        const positional = [...(arg !== undefined && arg !== '' ? [arg] : []), ...(opts.files ?? [])];
+        const files = opts.click ? positional : positional.slice(1);
+        const selector = opts.click ? undefined : positional[0];
+        if (!files.length)
+          throw new BroError('bad-args', 'usage: bro page exec <site> upload <input-css> <file...>  |  upload --click <button-css> <file...>');
+        const up = await uploadFiles(cdp, selector, files, { click: opts.click, waitMs: wait || undefined, yolo: opts.yolo });
+        result = { ...(selector ? { selector } : { click: opts.click }), ...up };
         break;
       }
       default:

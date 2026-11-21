@@ -17,6 +17,7 @@ import { pidAlive } from './lib/page.ts';
 import { openUrl, pageAction } from './lib/pageActions.ts';
 import { chromium } from 'playwright';
 
+import { warnRawDeprecated } from './lib/human.ts';
 interface Args {
   _: string[];
   json: boolean;
@@ -24,7 +25,7 @@ interface Args {
   detach: boolean;
   reload: boolean;
   full: boolean;
-  raw: boolean;
+  yolo: boolean;
   typos: boolean;
   dryRun: boolean;
   month?: string;
@@ -34,7 +35,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { _: [], json: false, headed: false, detach: false, reload: false, full: false, raw: false, typos: false, dryRun: false, params: {} };
+  const out: Args = { _: [], json: false, headed: false, detach: false, reload: false, full: false, yolo: false, typos: false, dryRun: false, params: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (!a.startsWith('--')) {
@@ -50,7 +51,10 @@ function parseArgs(argv: string[]): Args {
     else if (key === 'detach') out.detach = true;
     else if (key === 'reload') out.reload = true;
     else if (key === 'full') out.full = true;
-    else if (key === 'raw') out.raw = true;
+    else if (key === 'raw') {
+      warnRawDeprecated();
+      out.yolo = true;
+    } else if (key === 'yolo') out.yolo = true;
     else if (key === 'typos') out.typos = true;
     else if (key === 'dry-run') out.dryRun = true;
     else if (key === 'month') out.month = inlineVal ?? argv[++i];
@@ -302,9 +306,11 @@ async function main(): Promise<number> {
         max: args.params['max'] ? Number(args.params['max']) : undefined,
         reload: args.reload,
         full: args.full,
-        raw: args.raw,
+        yolo: args.yolo,
         typos: args.typos,
         out: args.params['out'],
+        click: args.params['click'],
+        files: parsed.rest.slice(3),
       });
       emit(args, true, r);
       if (!args.json) {
@@ -350,7 +356,7 @@ function capabilityDoc(): Record<string, unknown> {
       { name: 'page open', args: '<url> [--site <id>]  (default site: built-in scratch, started detached on demand)', interactive: false },
       {
         name: 'page exec',
-        args: '<site> tabs|text|eval <js>|goto <url>|click <css>|type <text>|key <Key>|shot <png>|capture <url-substr>|close [--tab <id|url-substr>] [--wait ms] [--reload] [--out file] [--full] [--max N] [--raw] [--typos]',
+        args: '<site> tabs|text|eval <js>|goto <url>|click <css>|type <text>|key <Key>|shot <png>|capture <url-substr>|upload <input-css> <file...>|upload --click <button-css> <file...>|close [--tab <id|url-substr>] [--wait ms] [--reload] [--out file] [--full] [--max N]',
         interactive: false,
       },
       { name: 'record', args: '<site> <workflow>', interactive: true, needsHuman: false },

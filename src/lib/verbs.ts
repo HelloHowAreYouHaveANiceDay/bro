@@ -1,6 +1,7 @@
 import { BroError } from './errors.ts';
 import type { PageOpts } from './pageActions.ts';
 
+import { warnRawDeprecated } from './human.ts';
 export function resolveDateStamp(params: Record<string, unknown>, now: Date): string | undefined {
   const requested = Object.prototype.hasOwnProperty.call(params, 'date-stamp') ? params['date-stamp'] : params.dateStamp;
   if (requested === true) {
@@ -21,7 +22,14 @@ export function pageOptsFromParams(params: Record<string, unknown>): PageOpts {
     reload: params.reload === true || params.reload === 'true',
     full: params.full === true || params.full === 'true',
     out: params.out ? String(params.out) : undefined,
-    ...(params.raw === true || params.raw === 'true' ? { raw: true } : {}),
+    click: params.click ? String(params.click) : undefined,
+    files: Array.isArray(params.files)
+      ? params.files.map(String)
+      : params.files
+        ? String(params.files).split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined,
+    ...(params.yolo === true || params.yolo === 'true' ? { yolo: true } : {}),
+    ...(params.raw === true || params.raw === 'true' ? (warnRawDeprecated(), { yolo: true }) : {}),
     ...(params.typos === true || params.typos === 'true' ? { typos: true } : {}),
   };
 }
