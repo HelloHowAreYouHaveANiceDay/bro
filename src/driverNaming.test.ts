@@ -20,13 +20,13 @@ afterEach(() => {
 
 describe('driver verb naming', () => {
   it('publishes the canonical ordered names', () => {
-    const verbs = (describeDoc().verbs as Array<{ name: string }>).map((v) => v.name);
+    const verbs = (describeDoc().verbs as Array<{ name: string; is_alias?: boolean }>).filter((v) => v.is_alias !== true).map((v) => v.name);
     expect(verbs).toEqual(['doctor', 'version', 'site list', 'session list', 'session launch', 'session quit', 'page open', 'page exec', 'workflow run', 'workflow run-all', 'auth login']);
     for (const name of verbs) for (const word of name.split(' ')) expect(word).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
 
   it('publishes the canonical typed arguments and effects', () => {
-    const verbs = describeDoc().verbs as Array<{ name: string; args: Array<{ name: string; type: string }>; effect: string; supports_dry_run?: boolean }>;
+    const verbs = (describeDoc().verbs as Array<{ name: string; is_alias?: boolean; args: Array<{ name: string; type: string }>; effect: string; supports_dry_run?: boolean }>).filter((v) => v.is_alias !== true);
     const byName = Object.fromEntries(verbs.map((verb) => [verb.name, verb]));
     expect(byName['workflow run']?.args.map((arg) => arg.name)).toEqual(['site', 'workflow', 'month', 'date-stamp', 'headed', 'dry-run']);
     expect(byName['workflow run-all']?.args.map((arg) => arg.name)).toEqual(['kind', 'month', 'dry-run']);

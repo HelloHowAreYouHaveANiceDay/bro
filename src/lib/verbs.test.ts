@@ -51,3 +51,18 @@ describe('pageOptsFromParams (driver) upload options', () => {
     expect(pageOptsFromParams({}).files).toBeUndefined();
   });
 });
+
+import { LEGACY_VERBS } from './verbs.ts';
+import { describeDoc } from '../driver.ts';
+
+describe('legacy verb aliases in describe', () => {
+  const verbs = describeDoc().verbs as Array<{ name: string; is_alias?: boolean; dispatches_to?: string }>;
+  const names = new Set(verbs.map((v) => v.name));
+  it.each(['auth', 'list', 'open', 'page', 'run', 'run-all', 'session', 'sessions', 'test'])('declares %s as a rename alias of a real verb', (old) => {
+    const row = verbs.find((v) => v.name === old);
+    expect(row?.is_alias).toBe(true);
+    expect(names.has(row!.dispatches_to!)).toBe(true);
+    expect(row!.dispatches_to).not.toBe('exec');
+    expect(old in LEGACY_VERBS).toBe(true);
+  });
+});
