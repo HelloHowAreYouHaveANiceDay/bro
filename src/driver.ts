@@ -20,7 +20,7 @@ import { canonicalMethod, pageOptsFromParams, resolveDateStamp } from './lib/ver
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
