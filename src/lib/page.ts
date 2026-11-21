@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BroError } from './errors.ts';
 import { getSession, probeCDP, type LiveSession } from './sessions.ts';
+import { Human, type Box, type HumanOpts, type HumanTarget } from './human.ts';
 
 /**
  * Page-level CDP verbs for a LIVE session (`bro page <site> ...`, `bro open <url>`).
@@ -209,6 +210,9 @@ export class PageCDP {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const CLICK_GOTO_WAIT_MS = 3000;
+/** After a click moved the URL, how long to wait for a load event (SPA routes fire none). */
+const CLICK_GOTO_SETTLE_MS = 1500;
 
 /** Center of the first VISIBLE element matching `selector`, scrolled into view; null if none. */
 const CENTER_JS = (selector: string) => `(() => {
@@ -220,7 +224,45 @@ const CENTER_JS = (selector: string) => `(() => {
   return {x: r.left + r.width / 2, y: r.top + r.height / 2};
 })()`;
 
-export async function clickSelector(cdp: PageCDP, selector: string): Promise<void> {
+/** Box (viewport coords) of the first VISIBLE element matching `selector`, without scrolling; null if none. */
+const BOX_JS = (selector: string) => `(() => {
+  const els = [...document.querySelectorAll(${JSON.stringify(selector)})];
+  const el = els.find(e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; });
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: r.left, y: r.top, width: r.width, height: r.height};
+})()`;
+const SCROLL_JS = (selector: string) => `(() => {
+  const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+  if (el) el.scrollIntoView({block: 'center', inline: 'center'});
+  return null;
+})()`;
+
+export function selectorTarget(cdp: PageCDP, selector: string): HumanTarget {
+  return {
+    box: async () => (await cdp.evaluate(BOX_JS(selector))) as Box | null,
+    scrollIntoView: async () => {
+      await cdp.evaluate(SCROLL_JS(selector));
+    },
+  };
+}
+
+export interface InputOpts extends HumanOpts {
+  /** skip the human layer: teleport click, insertText, bare navigate (flag: --yolo) */
+  yolo?: boolean;
+  /** goto: ms to wait after a link click for a load or URL change before navigating directly (default 3000) */
+  clickWaitMs?: number;
+  /** type: rare typo+Backspace (never use on password-like fields) */
+  typos?: boolean;
+}
+
+export async function clickSelector(cdp: PageCDP, selector: string, opts: InputOpts = {}): Promise<void> {
+  if (!opts.yolo) {
+    const target = selectorTarget(cdp, selector);
+    if (!(await target.box())) throw new BroError('not-found', `no visible element matches ${selector}`);
+    await new Human(cdp, opts).click(target);
+    return;
+  }
   const pt = (await cdp.evaluate(CENTER_JS(selector))) as { x: number; y: number } | null;
   if (!pt) throw new BroError('not-found', `no visible element matches ${selector}`);
   await sleep(80);
@@ -229,8 +271,12 @@ export async function clickSelector(cdp: PageCDP, selector: string): Promise<voi
   }
 }
 
-export async function typeText(cdp: PageCDP, text: string): Promise<void> {
-  await cdp.send('Input.insertText', { text });
+export async function typeText(cdp: PageCDP, text: string, opts: InputOpts = {}): Promise<void> {
+  if (opts.yolo) {
+    await cdp.send('Input.insertText', { text });
+    return;
+  }
+  await new Human(cdp, opts).type(text, { typos: opts.typos });
 }
 
 const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
@@ -242,24 +288,105 @@ const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
   ArrowUp: { code: 'ArrowUp', vk: 38 },
 };
 
-export async function pressKey(cdp: PageCDP, key: string): Promise<void> {
+export async function pressKey(cdp: PageCDP, key: string, opts: InputOpts = {}): Promise<void> {
   const k = KEYS[key];
   if (!k) throw new BroError('bad-args', `unsupported key "${key}"`, { hint: `keys: ${Object.keys(KEYS).join(', ')}` });
+  if (!opts.yolo) {
+    await new Human(cdp, opts).press(key);
+    return;
+  }
   const base = { key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...(k.text ? { text: k.text } : {}) });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 
-export async function gotoUrl(cdp: PageCDP, url: string, waitMs: number): Promise<string> {
+/**
+ * Visible, same-origin, same-tab anchor whose resolved href EXACTLY equals `target` (hash included) and
+ * that carries no click side effects: no onclick (attribute or property), no download attribute, not
+ * inside a <form>, not a javascript: URL. Anything else is left alone and goto navigates directly.
+ */
+const LINK_FIND_JS = (target: string) => `(() => {
+  let want; try { want = new URL(${JSON.stringify(target)}, location.href); } catch (e) { return null; }
+  if (want.origin !== location.origin) return null;
+  return [...document.querySelectorAll('a[href]')].find(a => {
+    const r = a.getBoundingClientRect(); const s = getComputedStyle(a);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'
+      && (!a.target || a.target === '_self') && !a.hasAttribute('download')
+      && !a.hasAttribute('onclick') && typeof a.onclick !== 'function' && !a.closest('form')
+      && a.protocol !== 'javascript:' && a.href === want.href;
+  }) || null;
+})()`;
+const LINK_JS = (target: string) => `(() => {
+  const el = ${LINK_FIND_JS(target)};
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: r.left, y: r.top, width: r.width, height: r.height};
+})()`;
+const LINK_SCROLL_JS = (target: string) => `(() => {
+  const el = ${LINK_FIND_JS(target)};
+  if (el) el.scrollIntoView({block: 'center', inline: 'center'});
+  return null;
+})()`;
+
+export interface GotoResult {
+  url: string;
+  via: 'click' | 'navigate';
+}
+
+/**
+ * Default goto: when the page already carries a visible same-origin link to `url`, click it like a
+ * person would (real Referer / click trail); otherwise, or with `yolo`, bare `Page.navigate`.
+ * Reports which path ran.
+ */
+export async function gotoUrl(cdp: PageCDP, url: string, waitMs: number, opts: InputOpts = {}): Promise<GotoResult> {
   await cdp.send('Page.enable');
   const loaded = new Promise<void>((resolve) => {
     cdp.on((method) => {
       if (method === 'Page.loadEventFired') resolve();
     });
   });
+  if (!opts.yolo) {
+    const here = String(await cdp.evaluate('location.href'));
+    let sameOrigin = false;
+    try {
+      sameOrigin = new URL(url, here).origin === new URL(here).origin;
+    } catch {
+      /* not comparable: navigate */
+    }
+    const target: HumanTarget = {
+      box: async () => (await cdp.evaluate(LINK_JS(url))) as Box | null,
+      scrollIntoView: async () => {
+        await cdp.evaluate(LINK_SCROLL_JS(url));
+      },
+    };
+    if (sameOrigin && (await target.box())) {
+      await new Human(cdp, opts).click(target);
+      // A click an SPA handles as a route fires no load event: bounded wait (load or URL change), then
+      // fall back to a direct navigation instead of sitting out the full --wait.
+      const bound = Math.min(waitMs, opts.clickWaitMs ?? CLICK_GOTO_WAIT_MS);
+      const deadline = Date.now() + bound;
+      let settled = false;
+      const loadedFlag = loaded.then(() => {
+        settled = true;
+      });
+      void loadedFlag;
+      while (!settled && Date.now() < deadline) {
+        const now = String(await cdp.evaluate('location.href'));
+        if (now !== here) {
+          settled = true;
+          break;
+        }
+        await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+      }
+      if (settled) {
+        await Promise.race([loaded, sleep(Math.min(CLICK_GOTO_SETTLE_MS, Math.max(0, waitMs - bound)))]);
+        return { url: String(await cdp.evaluate('location.href')), via: 'click' };
+      }
+    }
+  }
   await cdp.send('Page.navigate', { url });
   await Promise.race([loaded, sleep(waitMs)]);
-  return String(await cdp.evaluate('location.href'));
+  return { url: String(await cdp.evaluate('location.href')), via: 'navigate' };
 }
 
 export async function screenshot(cdp: PageCDP, out: string, fullPage = false): Promise<{ path: string; bytes: number }> {
@@ -283,7 +410,7 @@ export async function uploadFiles(
   cdp: PageCDP,
   selector: string | undefined,
   files: string[],
-  opts: { click?: string; waitMs?: number } = {},
+  opts: { click?: string; waitMs?: number; yolo?: boolean } = {},
 ): Promise<{ files: string[]; via: 'input' | 'filechooser'; mode?: string }> {
   if (!files.length) throw new BroError('bad-args', 'upload needs at least one file');
   const abs = files.map((f) => path.resolve(f));
@@ -304,7 +431,7 @@ export async function uploadFiles(
     });
     await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true });
     try {
-      await clickSelector(cdp, opts.click);
+      await clickSelector(cdp, opts.click, { yolo: opts.yolo });
       const chooser = await opened;
       if (!chooser) throw new BroError('not-found', `clicking ${opts.click} opened no file chooser within ${waitMs} ms`, { retriable: true });
       if (chooser.mode === 'selectSingle' && abs.length > 1)

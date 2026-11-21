@@ -29,6 +29,10 @@ export interface PageOpts {
   files?: string[];
   /** upload: click this to open the site's file chooser instead of naming the input */
   click?: string;
+  /** click/type/key/goto: old fast behaviour (no human pointer/keyboard timing; goto = bare navigate) */
+  yolo?: boolean;
+  /** type: rare typo+Backspace (never for passwords) */
+  typos?: boolean;
 }
 
 export async function openUrl(url: string, siteId = 'scratch'): Promise<Record<string, unknown>> {
@@ -78,24 +82,24 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         result = { value: await cdp.evaluate(need('js expression')) };
         break;
       case 'goto':
-        result = { url: await gotoUrl(cdp, need('url'), wait || 15000) };
+        result = { ...(await gotoUrl(cdp, need('url'), wait || 15000, { yolo: opts.yolo })) };
         break;
       case 'click': {
         const sel = need('css selector');
-        await clickSelector(cdp, sel);
+        await clickSelector(cdp, sel, { yolo: opts.yolo });
         if (wait) await new Promise((r) => setTimeout(r, wait));
         result = { clicked: sel, url: await cdp.evaluate('location.href') };
         break;
       }
       case 'type': {
         if (arg === undefined) throw new BroError('bad-args', 'usage: bro page <site> type <text>  (types into the focused element; click it first)');
-        await typeText(cdp, arg);
+        await typeText(cdp, arg, { yolo: opts.yolo, typos: opts.typos });
         result = { typed: arg.length };
         break;
       }
       case 'key': {
         const k = need('Enter|Tab|Escape|...');
-        await pressKey(cdp, k);
+        await pressKey(cdp, k, { yolo: opts.yolo });
         result = { key: k };
         break;
       }
@@ -116,7 +120,7 @@ export async function pageAction(siteId: string, action: string, arg: string | u
         const selector = opts.click ? undefined : positional[0];
         if (!files.length)
           throw new BroError('bad-args', 'usage: bro page exec <site> upload <input-css> <file...>  |  upload --click <button-css> <file...>');
-        const up = await uploadFiles(cdp, selector, files, { click: opts.click, waitMs: wait || undefined });
+        const up = await uploadFiles(cdp, selector, files, { click: opts.click, waitMs: wait || undefined, yolo: opts.yolo });
         result = { ...(selector ? { selector } : { click: opts.click }), ...up };
         break;
       }

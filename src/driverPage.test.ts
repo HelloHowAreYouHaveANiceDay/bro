@@ -8,7 +8,7 @@ describe('driver describe: page verbs', () => {
 
   it('exposes open and page so `bim bro open|page` route to the driver', () => {
     expect(byName['page open']!.args.map((a) => a.name)).toEqual(['url', 'site']);
-    expect(byName['page exec']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out', 'files', 'click']);
+    expect(byName['page exec']!.args.map((a) => a.name)).toEqual(['site', 'action', 'arg', 'tab', 'wait', 'max', 'reload', 'full', 'out', 'files', 'click', 'yolo', 'typos', 'raw']);
   });
 
   it('session takes --detach', () => {
