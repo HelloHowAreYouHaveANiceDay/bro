@@ -17,10 +17,10 @@ import { fileURLToPath } from 'node:url';
 
 import { BroError } from './lib/errors.ts';
 import { LEGACY_VERBS, canonicalMethod, pageOptsFromParams, resolveDateStamp } from './lib/verbs.ts';
-import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
+import { authMetaPath, authPath, playwrightBrowsersDir, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -210,6 +210,9 @@ export async function doctor(): Promise<Record<string, unknown>> {
     ...(pw ? {} : { hint: 'the playwright package is a managed dependency (installed into the bro runtime dir)',
       fix: 'install it once with the fix_cmd', fix_cmd: provisionCmd }) });
 
+  // Chromium never provisioned (no ms-playwright dir) = setup guidance, whatever resolved `pw`.
+  // Once a browsers dir exists, a missing/broken exe is a real fault and stays required.
+  const browsersProvisioned = fs.existsSync(playwrightBrowsersDir());
   let browserOk = false;
   let browserDetail = 'not checked (playwright missing)';
   if (pw) {
@@ -221,7 +224,7 @@ export async function doctor(): Promise<Record<string, unknown>> {
       browserDetail = e instanceof Error ? e.message.slice(0, 80) : 'unavailable';
     }
   }
-  checks.push({ name: 'browser:chromium', ok: browserOk, detail: browserDetail, optional: freshRuntime && !pw,
+  checks.push({ name: 'browser:chromium', ok: browserOk, detail: browserDetail, optional: freshRuntime || !browsersProvisioned,
     ...(browserOk ? {} : { hint: 'the Chromium browser binary is a managed dependency',
       fix: 'install it once with the fix_cmd',
       fix_cmd: `${provisionCmd} && "${path.join(rt, 'node_modules', '.bin', 'playwright')}" install chromium` }) });

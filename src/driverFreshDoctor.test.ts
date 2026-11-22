@@ -17,11 +17,12 @@ describe('doctor playwright/chromium vs runtime dir', () => {
   let rt: string;
   let saved: Record<string, string | undefined>;
   beforeEach(() => {
-    saved = { BRO_HOME: process.env.BRO_HOME, BRO_RUNTIME: process.env.BRO_RUNTIME };
+    saved = { BRO_HOME: process.env.BRO_HOME, BRO_RUNTIME: process.env.BRO_RUNTIME, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH };
     home = mkdtempSync(join(tmpdir(), 'bro-fd-'));
     rt = join(home, 'runtime');
     process.env.BRO_HOME = home;
     process.env.BRO_RUNTIME = rt;
+    process.env.PLAYWRIGHT_BROWSERS_PATH = join(home, 'ms-playwright');
     pwState.pw = null;
   });
   afterEach(() => {
@@ -43,12 +44,27 @@ describe('doctor playwright/chromium vs runtime dir', () => {
 
   it('runtime exists but playwright missing: stays required', async () => {
     mkdirSync(rt, { recursive: true });
+    mkdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH!, { recursive: true });
     expect((await get('dep:playwright')).optional).toBe(false);
     expect((await get('browser:chromium')).optional).toBe(false);
   });
 
+  it('fresh runtime but a playwright package resolved from outside it: chromium still optional', async () => {
+    pwState.pw = { chromium: { executablePath: () => join(home, 'nope.exe') } };
+    const b = await get('browser:chromium');
+    expect(b.ok).toBe(false);
+    expect(b.optional).toBe(true);
+  });
+
+  it('runtime exists, pw present, browsers dir never created: chromium optional', async () => {
+    mkdirSync(rt, { recursive: true });
+    pwState.pw = { chromium: { executablePath: () => join(home, 'nope.exe') } };
+    expect((await get('browser:chromium')).optional).toBe(true);
+  });
+
   it('playwright present but chromium missing: chromium stays required', async () => {
     mkdirSync(rt, { recursive: true });
+    mkdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH!, { recursive: true });
     pwState.pw = { chromium: { executablePath: () => join(home, 'nope.exe') } };
     expect((await get('dep:playwright')).ok).toBe(true);
     const b = await get('browser:chromium');
