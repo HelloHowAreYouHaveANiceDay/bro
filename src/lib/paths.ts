@@ -24,6 +24,24 @@ export function runtimeDir(): string {
   return process.env.BRO_RUNTIME ? path.resolve(process.env.BRO_RUNTIME) : path.join(dataRoot(), 'runtime');
 }
 
+/** Where Playwright keeps downloaded browsers (honours PLAYWRIGHT_BROWSERS_PATH; "0" = under the runtime node_modules). */
+export function playwrightBrowsersDir(): string {
+  const env = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (env === '0') return path.join(runtimeDir(), 'node_modules', 'playwright-core', '.local-browsers');
+  if (env) return path.resolve(env);
+  if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '.', 'AppData', 'Local'), 'ms-playwright');
+  }
+  if (process.platform === 'darwin') return path.join(process.env.HOME || '.', 'Library', 'Caches', 'ms-playwright');
+  return path.join(process.env.XDG_CACHE_HOME || path.join(process.env.HOME || '.', '.cache'), 'ms-playwright');
+}
+
+/** True when `resolved` lies strictly inside `dir` (keeps playwright resolution inside the runtime dir). */
+export function isInsideDir(resolved: string, dir: string): boolean {
+  const rel = path.relative(path.resolve(dir), path.resolve(resolved));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 /**
  * sites dir. Precedence: BRO_SITES_DIR env → cwd/sites (checkout/dev, writes discovery cache) →
  * <dataRoot>/sites-dir cache file (standalone SEA after first checkout run) → <dataRoot>/sites.

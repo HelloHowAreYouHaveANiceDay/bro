@@ -8,7 +8,7 @@
 // remain external — a managed dependency provisioned once into the runtime dir (see `bim bro doctor`).
 import path from 'node:path';
 import { Module } from 'node:module';
-import { runtimeDir } from './lib/paths.ts';
+import { runtimeDir, isInsideDir } from './lib/paths.ts';
 
 // The `paths` option below is a resolution START dir — Node appends `node_modules` to it — so pass
 // the runtime dir itself, NOT <runtimeDir>/node_modules (which would search a doubled node_modules).
@@ -24,7 +24,12 @@ const originalResolve = mod._resolveFilename;
 mod._resolveFilename = function (request, parent, isMain, options) {
   if (request === 'playwright' || request === 'playwright-core' ||
       request.startsWith('playwright/') || request.startsWith('playwright-core/')) {
-    return originalResolve.call(this, request, parent, isMain, { ...(options ?? {}), paths: [rtBase] });
+    const resolved = originalResolve.call(this, request, parent, isMain, { ...(options ?? {}), paths: [rtBase] });
+    // `paths` still walks UP from rtBase (e.g. C:\Users\x\node_modules) and checks global dirs; refuse anything outside.
+    if (!isInsideDir(resolved, rtBase)) {
+      throw Object.assign(new Error(`Cannot find module '${request}' in the bro runtime dir (${rtBase})`), { code: 'MODULE_NOT_FOUND' });
+    }
+    return resolved;
   }
   return originalResolve.call(this, request, parent, isMain, options);
 };
