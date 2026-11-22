@@ -20,7 +20,7 @@ import { LEGACY_VERBS, canonicalMethod, pageOptsFromParams, resolveDateStamp } f
 import { authMetaPath, authPath, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -202,9 +202,11 @@ export async function doctor(): Promise<Record<string, unknown>> {
   // for bim-blender. The exe itself bundles only bro's own code.
   const rt = runtimeDir();
   const provisionCmd = `npm i --prefix "${rt}" playwright`;
+  // Runtime never set up = fresh install: setup guidance, not a fault. Once the dir exists, stay required.
+  const freshRuntime = !fs.existsSync(rt);
   let pw: typeof import('playwright') | null = null;
   try { pw = (await import('./lib/playwright.ts')).loadPlaywright(); } catch { /* absent */ }
-  checks.push({ name: 'dep:playwright', ok: !!pw, detail: pw ? 'installed' : `not found (runtime: ${rt})`, optional: false,
+  checks.push({ name: 'dep:playwright', ok: !!pw, detail: pw ? 'installed' : `not found (runtime: ${rt})`, optional: freshRuntime,
     ...(pw ? {} : { hint: 'the playwright package is a managed dependency (installed into the bro runtime dir)',
       fix: 'install it once with the fix_cmd', fix_cmd: provisionCmd }) });
 
@@ -219,7 +221,7 @@ export async function doctor(): Promise<Record<string, unknown>> {
       browserDetail = e instanceof Error ? e.message.slice(0, 80) : 'unavailable';
     }
   }
-  checks.push({ name: 'browser:chromium', ok: browserOk, detail: browserDetail, optional: false,
+  checks.push({ name: 'browser:chromium', ok: browserOk, detail: browserDetail, optional: freshRuntime && !pw,
     ...(browserOk ? {} : { hint: 'the Chromium browser binary is a managed dependency',
       fix: 'install it once with the fix_cmd',
       fix_cmd: `${provisionCmd} && "${path.join(rt, 'node_modules', '.bin', 'playwright')}" install chromium` }) });
