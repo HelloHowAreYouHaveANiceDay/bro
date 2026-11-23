@@ -52,7 +52,7 @@ export class BroError extends Error {
 export function authExpired(siteId: string): BroError {
   return new BroError('auth-expired', `auth for "${siteId}" is expired or missing`, {
     needsHuman: true,
-    hint: `run: bro auth ${siteId}`,
+    hint: `run: bro auth login ${siteId} (agents: bim bro auth login ${siteId})`,
     detail: { site: siteId },
   });
 }

@@ -14,9 +14,12 @@ bro has two front doors over the same workflow engine:
   exits 0 after any valid response (even an error). stdout carries ONLY the frame — logs go to stderr.
 - TTY guard: bare run in a terminal prints a hint and exits 1 (never blocks on stdin).
 - Verbs: `doctor`, `version`, `site list`, `session list`, `session launch`, `session quit`,
-  `page open`, `page exec`, `workflow run`, `workflow run-all`, `auth login`. The
-  interactive verbs (`auth login`, `session launch`, `session quit`) are declared in `describe` but return a "use the CLI"
-  error in driver mode (they need a human / a long-lived process).
+  `page open`, `page exec`, `workflow run`, `workflow run-all`, `auth login`.
+  `session launch` always runs detached in driver mode (returns once LIVE). `auth login` spawns a
+  detached headed login window and returns `{site, pid, status: waiting-for-human|already-waiting,
+  log, next}` as soon as the window is up; the human logs in there and auth is saved on detection
+  (poll `site list` → `auth.capturedAt`). Only `session quit` still returns "use the CLI".
+  `auth_required` errors carry `remediation.verb = "bim bro auth login <site>"`.
 - Old wire methods remain available as aliases:
 
   | Old method | Canonical name |
