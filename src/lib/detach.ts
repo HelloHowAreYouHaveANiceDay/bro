@@ -27,9 +27,112 @@ function seaMode(): boolean {
  * re-running e.g. `bro open` would make every child spawn another child). `argv[0..1]` only supply
  * the launcher: node + script in checkout mode, the exe alone in SEA mode (argv[1] repeats it).
  */
-export function detachedArgv(site: string, argv: string[], execArgv: string[], sea: boolean): string[] {
-  const cmd = ['session', 'start', site];
+export function detachedArgv(site: string, argv: string[], execArgv: string[], sea: boolean, cmd: string[] = ['session', 'start', site]): string[] {
   return sea ? cmd : [...execArgv, argv[1]!, ...cmd];
+}
+
+/**
+ * Route a DETACHED child (spawned by startDetached / startDetachedLogin with DETACHED_ENV set) to its
+ * long-lived job. Returns the job's promise, or null when this process is not a detached child (a
+ * normal one-shot driver call). Shared by the SEA entry and the checkout-mode driver, so both modes
+ * can detach (the checkout driver used to read stdin and die with a parse error).
+ */
+export function runDetachedChild(argv: string[], env: NodeJS.ProcessEnv): Promise<void> | null {
+  if (!env[DETACHED_ENV]) return null;
+  const [a, b, site] = argv.slice(2);
+  if (!site) return null;
+  if (a === 'session' && b === 'start') return import('./sessionHost.ts').then((m) => m.hostSessionMain(site));
+  if (a === 'auth' && b === 'login') return loginHostMain(site);
+  return null;
+}
+
+export function loginLogPath(site: string): string {
+  return path.join(dataRoot(), 'logs', `auth-${site}.log`);
+}
+
+function loginPidPath(site: string): string {
+  return path.join(dataRoot(), 'logs', `auth-${site}.pid`);
+}
+
+/** Detached child body for `auth login <site>`: open the headed login window and save auth when done. */
+async function loginHostMain(siteId: string): Promise<void> {
+  const [{ loadSite }, { loadConfig }, { authCapture }] = await Promise.all([
+    import('./registry.ts'), import('./config.ts'), import('./auth.ts'),
+  ]);
+  const site = loadSite(siteId);
+  const pidFile = loginPidPath(siteId);
+  fs.writeFileSync(pidFile, String(process.pid));
+  try {
+    // authCapture prints "[bro] Log in to ..." once the login page has loaded; startDetachedLogin
+    // waits for that line in the log before returning to the agent.
+    await authCapture(site, loadConfig().browserChannel, new Date().toISOString());
+    process.stderr.write(`[bro] saved auth for ${siteId}.\n`);
+  } finally {
+    fs.rmSync(pidFile, { force: true });
+  }
+  process.exit(0);
+}
+
+/**
+ * `auth login <site>` for agents (the driver has no terminal): spawn a detached child that opens the
+ * HEADED login window for the human, and return as soon as the window is up -- not when the human
+ * finishes. The child auto-detects the login (or the human closes the window) and writes auth.json;
+ * the agent polls `site list` (auth.capturedAt) to see when it landed. Idempotent per site.
+ */
+export async function startDetachedLogin(
+  site: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ site: string; pid: number; status: 'waiting-for-human' | 'already-waiting'; log: string; next: string }> {
+  if (process.env[DETACHED_ENV]) {
+    throw new BroError('internal', 'refusing to detach from inside a detached host (would recurse)');
+  }
+  const log = loginLogPath(site);
+  const next = `ask the human to log in in the opened browser window, then poll \`bim bro site list\` until ${site}'s auth.capturedAt updates`;
+  const pidFile = loginPidPath(site);
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  if (fs.existsSync(pidFile)) {
+    const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    if (pid && pidAlive(pid)) return { site, pid, status: 'already-waiting', log, next };
+    fs.rmSync(pidFile, { force: true });
+  }
+
+  const fd = fs.openSync(log, 'a');
+  const startOffset = fs.fstatSync(fd).size;
+  fs.writeSync(fd, `\n--- ${new Date().toISOString()} detached auth login ${site}\n`);
+  const child = spawn(process.execPath, detachedArgv(site, process.argv, process.execArgv, seaMode(), ['auth', 'login', site]), {
+    detached: true,
+    windowsHide: false, // the whole point is a window the human can see
+    stdio: ['ignore', fd, fd],
+    cwd: process.cwd(),
+    env: { ...process.env, [DETACHED_ENV]: '1' },
+  });
+  child.unref();
+  fs.closeSync(fd);
+
+  const deadline = Date.now() + (opts.timeoutMs ?? 90_000);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    const tail = readFrom(log, startOffset);
+    // Ready once the login page has been navigated (authCapture's prompt) -- the window is up.
+    if (/\[bro\] Log in to /.test(tail)) return { site, pid: child.pid!, status: 'waiting-for-human', log, next };
+    if (child.pid && !pidAlive(child.pid)) {
+      throw new BroError('internal', `login window for "${site}" exited before it opened`, {
+        retriable: true, hint: `see ${log}`, detail: { pid: child.pid, log, tail: tail.slice(-2000) },
+      });
+    }
+  }
+  throw new BroError('internal', `login window for "${site}" did not open within ${Math.round((opts.timeoutMs ?? 90_000) / 1000)}s`, {
+    retriable: true, hint: `see ${log}`, detail: { pid: child.pid ?? null, log },
+  });
+}
+
+function readFrom(file: string, offset: number): string {
+  try {
+    const buf = fs.readFileSync(file);
+    return buf.subarray(offset).toString('utf8');
+  } catch {
+    return '';
+  }
 }
 
 /** Set in the detached host's env; a host that somehow reaches startDetached again refuses. */

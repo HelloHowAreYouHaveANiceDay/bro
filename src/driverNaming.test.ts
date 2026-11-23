@@ -61,7 +61,12 @@ describe('driver verb naming', () => {
     process.env.BRO_SITES_DIR = tempSites;
     await expect(dispatch('sessions', {})).resolves.toEqual({ sessions: [] });
     await expect(dispatch('session.list', {})).resolves.toEqual({ sessions: [] });
-    for (const method of ['auth.login', 'auth']) await expect(dispatch(method, { site: 'x' })).rejects.toMatchObject({ kind: 'bad-args', needsHuman: true, hint: 'bro auth login ...' });
+    // auth login / session launch are served by the driver now (detached); bad input still fails fast.
+    for (const method of ['auth.login', 'auth']) {
+      await expect(dispatch(method, {})).rejects.toMatchObject({ kind: 'bad-args' });
+      await expect(dispatch(method, { site: 'x' })).rejects.toMatchObject({ kind: 'no-such-site' });
+    }
+    await expect(dispatch('session.launch', { site: 'x' })).rejects.toMatchObject({ kind: 'no-such-site' });
     for (const [method, params] of [['session.quit', { site: 'a' }], ['session', { op: 'stop', site: 'a' }]] as const) {
       await expect(dispatch(method, params)).rejects.toMatchObject({ kind: 'bad-args', hint: 'bro session quit <site>' });
     }

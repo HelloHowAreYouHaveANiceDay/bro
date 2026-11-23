@@ -20,7 +20,7 @@ import { LEGACY_VERBS, canonicalMethod, pageOptsFromParams, resolveDateStamp } f
 import { authMetaPath, authPath, playwrightBrowsersDir, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -82,11 +82,11 @@ function describeDocBase(): Record<string, unknown> {
       { name: 'session list', description: 'live CDP browser sessions (alive = host pid running AND port answers)', args: [], output: 'json', effect: 'read' },
       {
         name: 'session launch',
-        description: 'start a live browser session (start needs --detach via the driver; attached start is INTERACTIVE -- use the bro CLI)',
-        interactive: true,
+        description: 'start a live (headed) browser session as its own process; returns once LIVE. Not logged in? the human logs in in that window, the session stays live',
+        human_steps: ['log in + clear MFA in the opened window (only if the site is not already authed)'],
         args: [
           { name: 'site', type: 'string', required: true, positional: true },
-          { name: 'detach', type: 'bool', help: 'start: run the session host as its own process; returns once LIVE' },
+          { name: 'detach', type: 'bool', help: 'accepted for compatibility; the driver always detaches (it has no terminal to stay attached to)' },
         ],
         output: 'json',
         effect: 'mutate',
@@ -166,13 +166,13 @@ function describeDocBase(): Record<string, unknown> {
       },
       {
         name: 'auth login',
-        description: 'capture site auth (INTERACTIVE -- use the bro CLI, not the driver)',
+        description: 'open a headed login window for the human and return once it is up (status waiting-for-human); auth is saved when they finish -- poll `site list` (auth.capturedAt)',
         interactive: true,
-        human_steps: ['open a browser', 'log in + clear MFA'],
+        human_steps: ['log in + clear MFA in the opened window (or close it once the dashboard shows)'],
         args: [{ name: 'site', type: 'string', required: true, positional: true }],
         output: 'json',
         effect: 'mutate',
-        notes: 'no dry-run: interactive human login in a real browser; the driver refuses it (use bro auth login <site>)',
+        notes: 'no dry-run: opening the window is the action. Returns {site, pid, status: waiting-for-human|already-waiting, log, next}; the window auto-closes after login (15 min cap)',
       },
     ],
   };
@@ -360,20 +360,24 @@ export async function dispatch(method: string, params: Record<string, unknown>):
       }
       return dryRun ? { summary, dry_run: true } : { summary };
     }
-    case 'session.launch':
-      if (params.detach === true || params.detach === 'true') {
-        const site = String(params.site ?? '');
-        if (!site) throw new BroError('bad-args', 'session launch requires site');
-        loadSite(site);
-        const { startDetached } = await import('./lib/detach.ts');
-        return startDetached(site);
-      }
-      throw new BroError('bad-args', '`session launch` is interactive -- run it via the bro CLI', {
-        needsHuman: true, hint: 'bro session launch ...',
-      });
+    case 'session.launch': {
+      // Always detached: the driver is a one-shot process with no terminal, so an attached host would
+      // die with it. Refusing without --detach left agents with no way to open a session (feedback 2026-11-23).
+      const site = String(params.site ?? '');
+      if (!site) throw new BroError('bad-args', 'session launch requires site');
+      loadSite(site);
+      const { startDetached } = await import('./lib/detach.ts');
+      return startDetached(site);
+    }
     case 'session.quit':
       throw new BroError('bad-args', 'session quit: use the bro CLI (`bro session quit <site>`)', { hint: 'bro session quit <site>' });
-    case 'auth.login':
+    case 'auth.login': {
+      const site = String(params.site ?? '');
+      if (!site) throw new BroError('bad-args', 'auth login requires site');
+      loadSite(site);
+      const { startDetachedLogin } = await import('./lib/detach.ts');
+      return startDetachedLogin(site);
+    }
     case 'record':
       throw new BroError('bad-args', `\`${method}\` is interactive -- run it via the bro CLI, not the driver`, {
         needsHuman: true,
@@ -382,6 +386,25 @@ export async function dispatch(method: string, params: Record<string, unknown>):
     default:
       throw Object.assign(new Error(`unknown method: ${method}`), { rpcKind: 'unknown-method', rpcHint: 'see `describe`' });
   }
+}
+
+/**
+ * Recovery pointer for agents. auth_required -> `bim bro auth login <site>` (which the driver now
+ * serves); before, the remediation repeated the FAILED verb as `bro <verb>`, a CLI bim installs don't ship.
+ */
+export function remediationFor(
+  kind: string, method: string, params: Record<string, unknown>, env: { needsHuman?: boolean; detail?: unknown },
+): { remediation?: { verb: string; interactive: boolean }; hint?: string } {
+  if (kind === 'auth_required') {
+    const detailSite = (env.detail as { site?: unknown } | undefined)?.site;
+    const site = String(detailSite ?? params.site ?? '<site>');
+    return {
+      remediation: { verb: `bim bro auth login ${site}`, interactive: true },
+      hint: `run \`bim bro auth login ${site}\` to open a login window for the human, then retry once \`bim bro site list\` shows fresh auth`,
+    };
+  }
+  if (env.needsHuman) return { remediation: { verb: `bim bro ${method.replaceAll('.', ' ')}`, interactive: true } };
+  return {};
 }
 
 function readStdin(): Promise<string> {
@@ -399,6 +422,10 @@ function writeFrame(frame: Record<string, unknown>): void {
 }
 
 async function main(): Promise<void> {
+  // A detached child (session host / login window) spawned from checkout mode re-enters here.
+  const { runDetachedChild } = await import('./lib/detach.ts');
+  const child = runDetachedChild(process.argv, process.env);
+  if (child) return child;
   // TTY guard: never block on stdin when run bare in a terminal (DIM-621).
   if (tty.isatty(0)) {
     process.stderr.write(
@@ -436,7 +463,7 @@ async function main(): Promise<void> {
     const kind = NORMALIZE_KIND[String(env.kind)] ?? String(env.kind);
     const data: Record<string, unknown> = { kind, retriable: env.retriable ?? false };
     if (env.hint) data.hint = env.hint;
-    if (env.needsHuman) data.remediation = { verb: `bro ${req.method.replaceAll('.', ' ')}`, interactive: true };
+    Object.assign(data, remediationFor(kind, req.method, req.params ?? {}, env));
     writeFrame({ jsonrpc: '2.0', error: { code: codeFor(kind), message: env.message, data }, id });
     process.exit(0); // exit 0 after writing any valid response frame
   }

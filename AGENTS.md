@@ -11,8 +11,10 @@ an agent can author, test, and run workflows autonomously.
   `{ ok, error }`. On any failure the error envelope is printed to **stdout** as JSON even without
   `--json`. Exit code is 0 on success, 1 on error.
 - **Branch on the error, don't parse prose.** Errors have `{ kind, retriable, needsHuman, hint }`:
-  - `auth-expired` → `needsHuman: true` — you cannot fix this; tell the human to run the hinted
-    `bro auth login <site>`.
+  - `auth-expired` → `needsHuman: true` — open the login window for the human with
+    `bro auth login <site>` (agents via bim: `bim bro auth login <site>`, which returns at once with
+    `status: waiting-for-human`), tell them to log in there, then poll `site list` until
+    `auth.capturedAt` updates and retry.
   - `bot-blocked` → `retriable: true` — retry with `--headed`.
   - `no-downloads` → the selectors likely broke; read the run log + `failure.png` under
     `.bro/runs/<id>/` and repair the workflow.

@@ -1,6 +1,10 @@
 import fs from 'node:fs';
-import { chromium } from 'playwright';
 import type { SiteConfig } from './types.ts';
+import { loadPlaywright } from './playwright.ts';
+
+// Load via createRequire (runtime-dir-pinned in the SEA), not a static import: the driver now runs
+// authCapture inside bim-bro (detached `auth login`), where a bundle-level require of playwright fails.
+const { chromium } = loadPlaywright();
 import { authPath, authMetaPath, profileDir } from './paths.ts';
 
 /** A randomized, non-maximized window size (avoids a fixed fingerprint + doesn't hog the screen). */
