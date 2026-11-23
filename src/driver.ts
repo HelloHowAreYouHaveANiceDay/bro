@@ -20,7 +20,7 @@ import { LEGACY_VERBS, canonicalMethod, pageOptsFromParams, resolveDateStamp } f
 import { authMetaPath, authPath, playwrightBrowsersDir, profileDir, runtimeDir, sitesDir } from './lib/paths.ts';
 import { listSites, listWorkflows, loadSite, loadWorkflow } from './lib/registry.ts';
 
-const VERSION = '0.4.4';
+const VERSION = '0.4.5';
 
 // bro/bim error kind -> JSON-RPC numeric code (pkg/rpc/errors.go table).
 const KIND_CODE: Record<string, number> = {
@@ -46,16 +46,24 @@ function legacyAliasRows(verbs: Array<Record<string, any>>): Array<Record<string
     run: 'workflow run', test: 'workflow run', 'run-all': 'workflow run-all', auth: 'auth login',
     session: 'session launch',
   };
+  // An alias named like the FIRST WORD of a canonical verb (auth, session, page) must declare no
+  // positional args: bim-cli's dispatcher only treats `<verb> <word>` as the two-word verb when the
+  // one-word verb has no positional slot to take <word>. With positionals, `bim bro auth login x`
+  // ran the `auth` alias with site="login", and `session launch|list`, `page open|exec` broke the
+  // same way (smoke test 2026-11-23). These aliases keep their names (pinned forever) and flags only.
+  const groups = new Set(verbs.map((v) => String(v.name)).filter((n) => n.includes(' ')).map((n) => n.split(' ')[0]));
   return Object.keys(LEGACY_VERBS).map((old) => {
     const base = verbs.find((v) => v.name === target[old])!;
-    const extra = old === 'session' ? [{ name: 'op', type: 'string', required: true, positional: true, help: 'start|stop (legacy; now session launch|quit)' }] : [];
+    const shadows = groups.has(old);
+    const extra = old === 'session' && !shadows ? [{ name: 'op', type: 'string', required: true, positional: true, help: 'start|stop (legacy; now session launch|quit)' }] : [];
+    const baseArgs = (base.args ?? []) as Array<Record<string, unknown>>;
     return {
       ...base,
       name: old,
       description: `DEPRECATED alias of \`${LEGACY_VERBS[old]}\``,
       is_alias: true,
       dispatches_to: target[old],
-      args: [...extra, ...(base.args ?? [])],
+      args: shadows ? baseArgs.filter((a) => !a.positional) : [...extra, ...baseArgs],
     };
   });
 }
