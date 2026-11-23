@@ -16,7 +16,7 @@ describe('driver describe: page verbs', () => {
   });
 
   it('reports the bumped version', () => {
-    expect(describeDoc().version).toBe('0.4.4');
+    expect(describeDoc().version).toBe('0.4.5');
   });
 });
 

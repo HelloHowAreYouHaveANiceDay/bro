@@ -37,3 +37,21 @@ describe('driver: agent-driven login', () => {
     expect(runDetachedChild(['node', 'x', 'page', 'open', 'u'], { [DETACHED_ENV]: '1' })).toBeNull();
   });
 });
+
+// bim-cli's methodFromArgs: `bim bro <a> <b> ...` becomes method `a.b` only when the row named `a`
+// declares no positional arg; otherwise <b> is eaten as a's first positional. A one-word alias that
+// shares a canonical verb's first word must therefore stay positional-free.
+describe('describe: aliases never shadow two-word verbs', () => {
+  const verbs = describeDoc().verbs as Array<{ name: string; args?: Array<{ positional?: boolean }> }>;
+  const byName = Object.fromEntries(verbs.map((v) => [v.name, v]));
+  const firstWords = [...new Set(verbs.map((v) => v.name).filter((n) => n.includes(' ')).map((n) => n.split(' ')[0]!))];
+
+  it.each(firstWords)('`%s` row has no positional args', (w) => {
+    const row = byName[w];
+    if (row) expect((row.args ?? []).filter((a) => a.positional)).toEqual([]);
+  });
+
+  it('keeps the pinned alias names', () => {
+    for (const n of ['auth', 'session', 'page', 'open', 'list', 'run', 'test', 'run-all', 'sessions']) expect(byName[n]).toBeDefined();
+  });
+});
